@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import re
+import select
 import signal
 import sys
+import termios
+import threading
 import time
+import tty
 from pathlib import Path
 
 GREEK = {
@@ -419,39 +424,239 @@ def render_once(text: str, width: int | None, theme_name: str, code_override: st
         console.print(md)
 
 
-def watch_loop(file: str, width: int | None, theme_name: str, code_override: str | None) -> int:
-    path = Path(file)
-    last_mtime = -1.0
-    sys.stdout.write("\x1b[?1049h")
-    sys.stdout.flush()
+ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+
+
+def _term_size() -> tuple[int, int]:
     try:
+        sz = os.get_terminal_size()
+        return sz.columns, sz.lines
+    except OSError:
+        return 80, 24
+
+
+def _ansi_strip(s: str) -> str:
+    return ANSI_RE.sub("", s)
+
+
+class _WatchState:
+    def __init__(self, file: str, user_width: int | None,
+                 theme_name: str, code_override: str | None) -> None:
+        self.file = Path(file)
+        self.user_width = user_width
+        self.theme_name = theme_name
+        self.code_override = code_override
+        self.lines: list[str] = []
+        self.offset = 0
+        self.cols, self.rows = _term_size()
+        self.last_reload = time.time()
+        self.lock = threading.Lock()
+        self.dirty = threading.Event()
+        self.stop = threading.Event()
+        self.resize_pending = False
+        self.status_msg = ""
+
+
+def _render_lines(state: _WatchState) -> list[str]:
+    try:
+        text = load_source(str(state.file))
+    except FileNotFoundError:
+        return [f"\x1b[31minnomd: waiting for {state.file}…\x1b[0m"]
+    except Exception as e:
+        return [f"\x1b[31minnomd: {e}\x1b[0m"]
+    try:
+        processed = preprocess(text)
+        Console, InnoMarkdown, rich_theme, code_theme = build_renderer(
+            state.theme_name, state.code_override)
+    except Exception as e:
+        return [f"\x1b[31minnomd: {e}\x1b[0m"]
+    width = state.user_width or max(20, state.cols)
+    buf = io.StringIO()
+    console = Console(file=buf, width=width, theme=rich_theme,
+                      force_terminal=True, color_system="truecolor",
+                      legacy_windows=False)
+    try:
+        md = InnoMarkdown(processed, code_theme=code_theme, hyperlinks=True)
+        console.print(md)
+    except Exception as e:
+        return [f"\x1b[31minnomd: render failed: {e}\x1b[0m"]
+    return buf.getvalue().rstrip("\n").split("\n")
+
+
+def _clamp_offset(state: _WatchState) -> None:
+    body_rows = max(1, state.rows - 1)
+    max_offset = max(0, len(state.lines) - body_rows)
+    state.offset = max(0, min(state.offset, max_offset))
+
+
+def _status_line(state: _WatchState) -> str:
+    total = max(1, len(state.lines))
+    body_rows = max(1, state.rows - 1)
+    bottom = min(state.offset + body_rows, total)
+    pct = int(100 * bottom / total)
+    ts = time.strftime("%H:%M:%S", time.localtime(state.last_reload))
+    left = (f" {state.file.name} · {state.offset + 1}-{bottom}/{total} "
+            f"({pct}%) · {state.theme_name} · {ts} ")
+    hints = " j/k ↑↓  space/b  g/G  q "
+    msg = state.status_msg
+    if msg:
+        middle = f"  {msg}  "
+    else:
+        middle = ""
+    pad = max(1, state.cols - len(left) - len(middle) - len(hints))
+    return (left + middle + " " * pad + hints)[:state.cols]
+
+
+def _draw(state: _WatchState) -> None:
+    with state.lock:
+        body_rows = max(1, state.rows - 1)
+        visible = state.lines[state.offset:state.offset + body_rows]
+        status = _status_line(state)
+        rows = state.rows
+    out = ["\x1b[H"]
+    for line in visible:
+        out.append(line)
+        out.append("\x1b[K\n")
+    for _ in range(body_rows - len(visible)):
+        out.append("\x1b[K\n")
+    out.append(f"\x1b[{rows};1H\x1b[7m")
+    out.append(status)
+    out.append("\x1b[0m\x1b[K")
+    sys.stdout.write("".join(out))
+    sys.stdout.flush()
+
+
+def _watcher_thread(state: _WatchState) -> None:
+    last_mtime = -1.0
+    while not state.stop.is_set():
+        try:
+            mtime = state.file.stat().st_mtime
+        except FileNotFoundError:
+            mtime = -1.0
+        if mtime != last_mtime:
+            last_mtime = mtime
+            lines = _render_lines(state)
+            with state.lock:
+                state.lines = lines
+                state.last_reload = time.time()
+                _clamp_offset(state)
+            state.dirty.set()
+        state.stop.wait(0.3)
+
+
+def _read_key(timeout: float) -> str | None:
+    try:
+        r, _, _ = select.select([sys.stdin], [], [], timeout)
+    except (InterruptedError, OSError):
+        return None
+    if not r:
+        return None
+    ch = sys.stdin.read(1)
+    if ch != "\x1b":
+        return ch
+    r, _, _ = select.select([sys.stdin], [], [], 0.02)
+    if not r:
+        return "\x1b"
+    seq = "\x1b" + sys.stdin.read(1)
+    if seq == "\x1b[":
         while True:
-            try:
-                mtime = path.stat().st_mtime
-            except FileNotFoundError:
-                sys.stdout.write("\x1b[2J\x1b[H")
-                print(f"innomd: waiting for {path} to exist…", file=sys.stderr)
-                time.sleep(0.5)
+            r, _, _ = select.select([sys.stdin], [], [], 0.02)
+            if not r:
+                break
+            c = sys.stdin.read(1)
+            seq += c
+            if c.isalpha() or c == "~":
+                break
+    return seq
+
+
+def _handle_key(state: _WatchState, key: str) -> str | None:
+    with state.lock:
+        body_rows = max(1, state.rows - 1)
+        page = max(1, body_rows - 1)
+        if key in ("q", "\x03"):
+            return "quit"
+        elif key in ("j", "\x1b[B"):
+            state.offset += 1
+        elif key in ("k", "\x1b[A"):
+            state.offset -= 1
+        elif key in (" ", "\x1b[6~"):
+            state.offset += page
+        elif key in ("b", "\x1b[5~"):
+            state.offset -= page
+        elif key in ("g", "\x1b[H"):
+            state.offset = 0
+        elif key in ("G", "\x1b[F"):
+            state.offset = len(state.lines)
+        else:
+            return None
+        _clamp_offset(state)
+    return "redraw"
+
+
+def watch_loop(file: str, width: int | None, theme_name: str,
+               code_override: str | None) -> int:
+    state = _WatchState(file, width, theme_name, code_override)
+
+    if not sys.stdin.isatty():
+        print("innomd: --watch requires an interactive terminal on stdin",
+              file=sys.stderr)
+        return 1
+
+    with state.lock:
+        state.lines = _render_lines(state)
+        _clamp_offset(state)
+    state.dirty.set()
+
+    old_termios = termios.tcgetattr(sys.stdin)
+    sys.stdout.write("\x1b[?1049h\x1b[?25l")
+    sys.stdout.flush()
+    tty.setcbreak(sys.stdin.fileno())
+
+    def on_resize(*_args) -> None:
+        state.resize_pending = True
+
+    prev_winch = signal.getsignal(signal.SIGWINCH) if hasattr(signal, "SIGWINCH") else None
+    if hasattr(signal, "SIGWINCH"):
+        signal.signal(signal.SIGWINCH, on_resize)
+
+    watcher = threading.Thread(target=_watcher_thread, args=(state,), daemon=True)
+    watcher.start()
+
+    try:
+        while not state.stop.is_set():
+            if state.resize_pending:
+                state.resize_pending = False
+                cols, rows = _term_size()
+                with state.lock:
+                    state.cols, state.rows = cols, rows
+                lines = _render_lines(state)
+                with state.lock:
+                    state.lines = lines
+                    _clamp_offset(state)
+                state.dirty.set()
+            if state.dirty.is_set():
+                state.dirty.clear()
+                _draw(state)
+            key = _read_key(0.1)
+            if key is None:
                 continue
-            if mtime != last_mtime:
-                last_mtime = mtime
-                sys.stdout.write("\x1b[2J\x1b[H")
-                sys.stdout.flush()
-                try:
-                    text = load_source(file)
-                    processed = preprocess(text)
-                    render_once(processed, width, theme_name, code_override, use_pager=False)
-                except Exception as e:
-                    print(f"innomd watch: {e}", file=sys.stderr)
-                ts = time.strftime("%H:%M:%S")
-                print(f"\n\x1b[2m[watching {path.name} · last update {ts} · theme {theme_name} · Ctrl+C to exit]\x1b[0m",
-                      file=sys.stderr)
-            time.sleep(0.3)
+            action = _handle_key(state, key)
+            if action == "quit":
+                break
+            if action == "redraw":
+                state.dirty.set()
     except KeyboardInterrupt:
-        return 0
+        pass
     finally:
-        sys.stdout.write("\x1b[?1049l")
+        state.stop.set()
+        if hasattr(signal, "SIGWINCH") and prev_winch is not None:
+            signal.signal(signal.SIGWINCH, prev_winch)
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_termios)
+        sys.stdout.write("\x1b[?25h\x1b[?1049l")
         sys.stdout.flush()
+
+    return 0
 
 
 def main() -> int:
@@ -486,7 +691,6 @@ def main() -> int:
         if not args.file:
             print("innomd: --watch requires a file argument", file=sys.stderr)
             return 1
-        signal.signal(signal.SIGINT, lambda *a: sys.exit(0))
         return watch_loop(args.file, args.width, args.theme, args.code_theme)
 
     try:
