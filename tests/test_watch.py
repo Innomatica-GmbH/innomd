@@ -155,6 +155,48 @@ class TestSearch(unittest.TestCase):
         self.assertEqual(s.offset, 3)  # wraps backward
 
 
+class TestMouse(unittest.TestCase):
+    def _mk(self):
+        s = innomd._WatchState("/tmp/x.md", None, "default", None)
+        s.lines = [f"line {i}" for i in range(200)]
+        s.cols, s.rows = 80, 10
+        s.offset = 50
+        return s
+
+    def test_wheel_down_scrolls_down(self):
+        s = self._mk()
+        start = s.offset
+        innomd._handle_key(s, "\x1b[<65;10;5M")
+        self.assertEqual(s.offset, start + innomd.MOUSE_SCROLL_LINES)
+
+    def test_wheel_up_scrolls_up(self):
+        s = self._mk()
+        start = s.offset
+        innomd._handle_key(s, "\x1b[<64;10;5M")
+        self.assertEqual(s.offset, start - innomd.MOUSE_SCROLL_LINES)
+
+    def test_wheel_up_clamps_to_zero(self):
+        s = self._mk()
+        s.offset = 1
+        innomd._handle_key(s, "\x1b[<64;10;5M")
+        self.assertEqual(s.offset, 0)
+
+    def test_release_is_ignored(self):
+        s = self._mk()
+        start = s.offset
+        innomd._handle_key(s, "\x1b[<65;10;5m")  # lowercase m = release
+        self.assertEqual(s.offset, start)
+
+    def test_mouse_works_while_in_prompt(self):
+        s = self._mk()
+        innomd._handle_key(s, "/")
+        self.assertEqual(s.mode, "prompt")
+        start = s.offset
+        innomd._handle_key(s, "\x1b[<65;10;5M")
+        self.assertEqual(s.offset, start + innomd.MOUSE_SCROLL_LINES)
+        self.assertEqual(s.mode, "prompt")  # still in prompt
+
+
 class TestPromptKeys(unittest.TestCase):
     def _mk(self):
         s = innomd._WatchState("/tmp/x.md", None, "default", None)

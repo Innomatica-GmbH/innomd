@@ -425,6 +425,8 @@ def render_once(text: str, width: int | None, theme_name: str, code_override: st
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
+MOUSE_RE = re.compile(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])")
+MOUSE_SCROLL_LINES = 3
 
 
 def _term_size() -> tuple[int, int]:
@@ -705,7 +707,29 @@ def _handle_prompt_key(state: _WatchState, key: str) -> str | None:
     return None
 
 
+def _handle_mouse(state: _WatchState, key: str) -> str | None:
+    m = MOUSE_RE.match(key)
+    if not m:
+        return None
+    btn, _, _, action = int(m.group(1)), m.group(2), m.group(3), m.group(4)
+    if action != "M":
+        return "redraw"  # ignore release events
+    if btn == 64:
+        with state.lock:
+            state.offset -= MOUSE_SCROLL_LINES
+            _clamp_offset(state)
+        return "redraw"
+    if btn == 65:
+        with state.lock:
+            state.offset += MOUSE_SCROLL_LINES
+            _clamp_offset(state)
+        return "redraw"
+    return "redraw"
+
+
 def _handle_key(state: _WatchState, key: str) -> str | None:
+    if key.startswith("\x1b[<"):
+        return _handle_mouse(state, key)
     if state.mode == "prompt":
         return _handle_prompt_key(state, key)
     if key == "/":
@@ -766,7 +790,7 @@ def watch_loop(file: str, width: int | None, theme_name: str,
     state.dirty.set()
 
     old_termios = termios.tcgetattr(sys.stdin)
-    sys.stdout.write("\x1b[?1049h\x1b[?25l")
+    sys.stdout.write("\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h")
     sys.stdout.flush()
     tty.setcbreak(sys.stdin.fileno())
 
@@ -811,7 +835,7 @@ def watch_loop(file: str, width: int | None, theme_name: str,
         if hasattr(signal, "SIGWINCH") and prev_winch is not None:
             signal.signal(signal.SIGWINCH, prev_winch)
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_termios)
-        sys.stdout.write("\x1b[?25h\x1b[?1049l")
+        sys.stdout.write("\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l")
         sys.stdout.flush()
 
     return 0
