@@ -275,7 +275,10 @@ def convert_math(tex: str) -> str:
     s = replace_command_with_groups(s, "dot", 1, lambda a: a[0] + "̇")
     items = sorted(list(GREEK.items()) + list(OPERATORS.items()), key=lambda x: -len(x[0]))
     for k, v in items:
-        s = s.replace(k, v)
+        if k and k[-1].isalpha():
+            s = re.sub(re.escape(k) + r"(?![A-Za-z])", v, s)
+        else:
+            s = s.replace(k, v)
     s = re.sub(r"\^\{([^{}]+)\}", lambda m: to_super(m.group(1)), s)
     s = re.sub(r"_\{([^{}]+)\}", lambda m: to_sub(m.group(1)), s)
     s = re.sub(r"\^(\\?[A-Za-z0-9+\-])", lambda m: to_super(m.group(1).lstrip("\\")), s)

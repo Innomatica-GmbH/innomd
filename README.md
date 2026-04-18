@@ -19,6 +19,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Innomatica-GmbH/innomd/actions/workflows/tests.yml"><img alt="Tests" src="https://github.com/Innomatica-GmbH/innomd/actions/workflows/tests.yml/badge.svg"></a>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue.svg">
   <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-blue.svg">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg">
@@ -163,6 +164,16 @@ Probably, via WSL. Native Windows Terminal support is untested.
 to pixel perfection. Terminals can't. For papers, export to PDF with `pandoc`.
 Notation that survives well: physics formulas, basic algebra, common operators.
 Notation that degrades: matrices, commutative diagrams, large alignments.
+
+## Development
+
+Run the test suite (53 unit + end-to-end tests):
+
+```bash
+python3 -m unittest discover -s tests -t tests -v
+```
+
+CI runs the suite on Python 3.9 – 3.12 against every push and pull request.
 
 ## Contributing
 
