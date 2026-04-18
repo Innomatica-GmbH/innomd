@@ -99,6 +99,28 @@ ln -s "$(pwd)/innomd" ~/.local/bin/innomd
 
 Or drop `innomd` anywhere on your `$PATH`.
 
+### Windows (via WSL)
+
+`innomd` depends on POSIX terminal APIs (`termios`, `tty`) for its
+interactive watch mode, so it is developed and tested for Linux and
+macOS. On Windows, use it inside the **Windows Subsystem for Linux**:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Then inside your Ubuntu shell:
+
+```bash
+sudo apt install -y python3-pip git
+git clone https://github.com/Innomatica-GmbH/innomd.git
+cd innomd && pip install -r requirements.txt
+ln -s "$(pwd)/innomd" ~/.local/bin/innomd
+```
+
+Open a WSL tab in Windows Terminal — everything including watch mode,
+mouse scrolling, and search works as on Linux.
+
 ## Usage
 
 ```bash
@@ -184,7 +206,9 @@ For quick notes, cat-ing a `.md` in the terminal is faster than opening
 a GUI. This tool is for people who already live in tmux.
 
 **Does it work on Windows?**
-Probably, via WSL. Native Windows Terminal support is untested.
+Not natively — `innomd` uses POSIX terminal APIs (`termios`/`tty`) for
+its interactive watch mode. Use it via **WSL** (see the install
+section). Inside WSL everything works identically to Linux.
 
 ## Limitations
 
