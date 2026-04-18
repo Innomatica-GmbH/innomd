@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""innomd — CLI Markdown-Viewer mit LaTeX-Mathe-Unterstützung."""
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+GREEK = {
+    r"\alpha": "α", r"\beta": "β", r"\gamma": "γ", r"\delta": "δ",
+    r"\epsilon": "ϵ", r"\varepsilon": "ε", r"\zeta": "ζ", r"\eta": "η",
+    r"\theta": "θ", r"\vartheta": "ϑ", r"\iota": "ι", r"\kappa": "κ",
+    r"\lambda": "λ", r"\mu": "μ", r"\nu": "ν", r"\xi": "ξ",
+    r"\pi": "π", r"\varpi": "ϖ", r"\rho": "ρ", r"\varrho": "ϱ",
+    r"\sigma": "σ", r"\varsigma": "ς", r"\tau": "τ", r"\upsilon": "υ",
+    r"\phi": "φ", r"\varphi": "ϕ", r"\chi": "χ", r"\psi": "ψ", r"\omega": "ω",
+    r"\Gamma": "Γ", r"\Delta": "Δ", r"\Theta": "Θ", r"\Lambda": "Λ",
+    r"\Xi": "Ξ", r"\Pi": "Π", r"\Sigma": "Σ", r"\Upsilon": "Υ",
+    r"\Phi": "Φ", r"\Psi": "Ψ", r"\Omega": "Ω",
+    r"\hbar": "ℏ", r"\ell": "ℓ", r"\Re": "ℜ", r"\Im": "ℑ",
+}
+
+OPERATORS = {
+    r"\cdot": "·", r"\times": "×", r"\div": "÷", r"\pm": "±", r"\mp": "∓",
+    r"\ast": "∗", r"\star": "⋆", r"\circ": "∘", r"\bullet": "•",
+    r"\leq": "≤", r"\le": "≤", r"\geq": "≥", r"\ge": "≥",
+    r"\neq": "≠", r"\ne": "≠", r"\approx": "≈", r"\equiv": "≡",
+    r"\sim": "∼", r"\simeq": "≃", r"\cong": "≅", r"\propto": "∝",
+    r"\ll": "≪", r"\gg": "≫",
+    r"\infty": "∞", r"\partial": "∂", r"\nabla": "∇", r"\prime": "′",
+    r"\sum": "∑", r"\prod": "∏", r"\coprod": "∐",
+    r"\int": "∫", r"\iint": "∬", r"\iiint": "∭", r"\oint": "∮",
+    r"\sqrt": "√",
+    r"\rightarrow": "→", r"\to": "→", r"\leftarrow": "←", r"\gets": "←",
+    r"\Rightarrow": "⇒", r"\Leftarrow": "⇐", r"\Leftrightarrow": "⇔",
+    r"\leftrightarrow": "↔", r"\uparrow": "↑", r"\downarrow": "↓",
+    r"\mapsto": "↦", r"\longrightarrow": "⟶", r"\longleftarrow": "⟵",
+    r"\in": "∈", r"\notin": "∉", r"\ni": "∋",
+    r"\subset": "⊂", r"\supset": "⊃", r"\subseteq": "⊆", r"\supseteq": "⊇",
+    r"\cup": "∪", r"\cap": "∩", r"\setminus": "∖", r"\emptyset": "∅", r"\varnothing": "∅",
+    r"\forall": "∀", r"\exists": "∃", r"\nexists": "∄", r"\neg": "¬",
+    r"\land": "∧", r"\wedge": "∧", r"\lor": "∨", r"\vee": "∨",
+    r"\therefore": "∴", r"\because": "∵",
+    r"\ldots": "…", r"\cdots": "⋯", r"\vdots": "⋮", r"\ddots": "⋱",
+    r"\dots": "…",
+    r"\quad": "   ", r"\qquad": "      ",
+    r"\,": " ", r"\;": " ", r"\:": " ", r"\!": "", r"\ ": " ",
+    r"\%": "%", r"\$": "$", r"\&": "&", r"\#": "#", r"\_": "_",
+    r"\{": "{", r"\}": "}",
+    r"\deg": "°", r"\degree": "°",
+    r"\langle": "⟨", r"\rangle": "⟩",
+    r"\lfloor": "⌊", r"\rfloor": "⌋", r"\lceil": "⌈", r"\rceil": "⌉",
+    r"\aleph": "ℵ", r"\Box": "□", r"\Diamond": "◇", r"\triangle": "△",
+    r"\mathbb{R}": "ℝ", r"\mathbb{N}": "ℕ", r"\mathbb{Z}": "ℤ",
+    r"\mathbb{Q}": "ℚ", r"\mathbb{C}": "ℂ", r"\mathbb{P}": "ℙ",
+    r"\mathcal{L}": "ℒ", r"\mathcal{H}": "ℋ",
+    r"\left": "", r"\right": "", r"\bigl": "", r"\bigr": "",
+    r"\big": "", r"\Big": "", r"\Bigg": "",
+    r"\displaystyle": "", r"\textstyle": "", r"\scriptstyle": "",
+}
+
+SUPERSCRIPT = str.maketrans(
+    "0123456789+-=()nabcdefghijklmoprstuvwxyzABDEGHIJKLMNOPRTUVW",
+    "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐᵒᵖʳˢᵗᵘᵛʷˣʸᶻᴬᴮᴰᴱᴳᴴᴵᴶᴷᴸᴹᴺᴼᴾᴿᵀᵁⱽᵂ",
+)
+SUBSCRIPT = str.maketrans(
+    "0123456789+-=()aehijklmnoprstuvx",
+    "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ",
+)
+
+
+def to_super(s: str) -> str:
+    if s and all(c in "0123456789+-=()nabcdefghijklmoprstuvwxyzABDEGHIJKLMNOPRTUVW" for c in s):
+        return s.translate(SUPERSCRIPT)
+    if len(s) == 1:
+        return "^" + s
+    return "^(" + s + ")"
+
+
+def to_sub(s: str) -> str:
+    if s and all(c in "0123456789+-=()aehijklmnoprstuvx" for c in s):
+        return s.translate(SUBSCRIPT)
+    if len(s) == 1:
+        return "_" + s
+    return "_(" + s + ")"
+
+
+def strip_group(s: str) -> str:
+    """Find outermost {...} and return its content, else return s."""
+    if s.startswith("{") and s.endswith("}"):
+        depth = 0
+        for i, c in enumerate(s):
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0 and i != len(s) - 1:
+                    return s
+        return s[1:-1]
+    return s
+
+
+def balanced_groups(s: str, start: int) -> tuple[str, int] | None:
+    """Parse {...} starting at s[start], return (content, end_idx_exclusive)."""
+    if start >= len(s) or s[start] != "{":
+        return None
+    depth = 0
+    for i in range(start, len(s)):
+        if s[i] == "{":
+            depth += 1
+        elif s[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return s[start + 1 : i], i + 1
+    return None
+
+
+def replace_command_with_groups(text: str, name: str, n_args: int, fn) -> str:
+    """Replace occurrences of \\name{arg1}...{argN} using fn(args) -> str."""
+    out = []
+    i = 0
+    pattern = "\\" + name
+    while i < len(text):
+        if text.startswith(pattern, i):
+            # Ensure not a longer command (e.g. \frac vs \fraction)
+            after = i + len(pattern)
+            if after < len(text) and text[after].isalpha():
+                out.append(text[i])
+                i += 1
+                continue
+            args = []
+            j = after
+            # Skip optional whitespace between command and arg
+            while j < len(text) and text[j] == " ":
+                j += 1
+            ok = True
+            for _ in range(n_args):
+                grp = balanced_groups(text, j)
+                if grp is None:
+                    ok = False
+                    break
+                args.append(grp[0])
+                j = grp[1]
+            if ok:
+                out.append(fn(args))
+                i = j
+                continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+def convert_math(tex: str) -> str:
+    s = tex
+    # Strip \text-family wrappers, iteratively (handles nesting)
+    for _ in range(3):
+        for cmd in ("text", "mathrm", "mathbf", "mathit", "mathsf", "mathtt", "operatorname", "textbf", "textit"):
+            s = replace_command_with_groups(s, cmd, 1, lambda a: a[0])
+    # Fractions (may recurse a couple of times)
+    for _ in range(4):
+        s = replace_command_with_groups(
+            s, "frac", 2,
+            lambda a: (f"({a[0]})/({a[1]})" if any(c in a[0] + a[1] for c in "+-·× ") else f"{a[0]}/{a[1]}"),
+        )
+        s = replace_command_with_groups(
+            s, "dfrac", 2,
+            lambda a: (f"({a[0]})/({a[1]})" if any(c in a[0] + a[1] for c in "+-·× ") else f"{a[0]}/{a[1]}"),
+        )
+        s = replace_command_with_groups(s, "tfrac", 2,
+            lambda a: (f"({a[0]})/({a[1]})" if any(c in a[0] + a[1] for c in "+-·× ") else f"{a[0]}/{a[1]}"))
+    # \sqrt[n]{x}
+    s = re.sub(r"\\sqrt\[([^\]]+)\]\{([^{}]+)\}", lambda m: to_super(m.group(1)) + "√(" + m.group(2) + ")", s)
+    s = replace_command_with_groups(s, "sqrt", 1, lambda a: "√(" + a[0] + ")")
+    # \vec{x} → x⃗
+    s = replace_command_with_groups(s, "vec", 1, lambda a: a[0] + "⃗")
+    s = replace_command_with_groups(s, "hat", 1, lambda a: a[0] + "̂")
+    s = replace_command_with_groups(s, "bar", 1, lambda a: a[0] + "̄")
+    s = replace_command_with_groups(s, "dot", 1, lambda a: a[0] + "̇")
+    # Greek + operators, longest first to avoid prefix clashes
+    items = sorted(list(GREEK.items()) + list(OPERATORS.items()), key=lambda x: -len(x[0]))
+    for k, v in items:
+        s = s.replace(k, v)
+    # Super/subscripts — braced form first
+    s = re.sub(r"\^\{([^{}]+)\}", lambda m: to_super(m.group(1)), s)
+    s = re.sub(r"_\{([^{}]+)\}", lambda m: to_sub(m.group(1)), s)
+    # Single-char form
+    s = re.sub(r"\^(\\?[A-Za-z0-9+\-])", lambda m: to_super(m.group(1).lstrip("\\")), s)
+    s = re.sub(r"_(\\?[A-Za-z0-9+\-])", lambda m: to_sub(m.group(1).lstrip("\\")), s)
+    # Drop remaining single-level braces (e.g. {,} in 2{,}898)
+    prev = None
+    while prev != s:
+        prev = s
+        s = re.sub(r"\{([^{}]*)\}", r"\1", s)
+    # Tidy whitespace
+    s = re.sub(r"[ \t]+", " ", s).strip()
+    return s
+
+
+def preprocess(text: str) -> str:
+    # Code fences: protect from math substitution
+    fence_re = re.compile(r"(^```.*?^```)", re.DOTALL | re.MULTILINE)
+    parts = fence_re.split(text)
+    out = []
+    for part in parts:
+        if part.startswith("```"):
+            out.append(part)
+            continue
+        # Block math $$...$$
+        part = re.sub(
+            r"\$\$(.+?)\$\$",
+            lambda m: "\n\n> **" + convert_math(m.group(1)) + "**\n\n",
+            part,
+            flags=re.DOTALL,
+        )
+        # \[ ... \]
+        part = re.sub(
+            r"\\\[(.+?)\\\]",
+            lambda m: "\n\n> **" + convert_math(m.group(1)) + "**\n\n",
+            part,
+            flags=re.DOTALL,
+        )
+        # Inline math $...$  (avoid empty and escaped)
+        part = re.sub(
+            r"(?<!\\)\$([^\$\n]+?)(?<!\\)\$",
+            lambda m: "`" + convert_math(m.group(1)) + "`",
+            part,
+        )
+        # \( ... \)
+        part = re.sub(
+            r"\\\((.+?)\\\)",
+            lambda m: "`" + convert_math(m.group(1)) + "`",
+            part,
+            flags=re.DOTALL,
+        )
+        out.append(part)
+    return "".join(out)
+
+
+def render(text: str, width: int | None, no_pager: bool, theme: str) -> None:
+    from rich import box
+    from rich.align import Align
+    from rich.console import Console
+    from rich.markdown import Markdown, TableElement, HorizontalRule
+    from rich.table import Table
+    from rich.text import Text
+
+    class InnoTable(TableElement):
+        def __rich_console__(self, console, options):
+            table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan",
+                          border_style="dim", pad_edge=True, expand=False)
+            if self.header is not None and self.header.row is not None:
+                for column in self.header.row.cells:
+                    table.add_column(column.content)
+            if self.body is not None:
+                for row in self.body.rows:
+                    table.add_row(*[c.content for c in row.cells])
+            yield table
+
+    class InnoRule(HorizontalRule):
+        def __rich_console__(self, console, options):
+            yield Align.center(Text("· · ·", style="dim"))
+
+    class InnoMarkdown(Markdown):
+        elements = {**Markdown.elements, "table_open": InnoTable, "hr": InnoRule}
+
+    console = Console(width=width)
+    md = InnoMarkdown(text, code_theme=theme, hyperlinks=True)
+    use_pager = (not no_pager) and sys.stdout.isatty()
+    if use_pager:
+        import os
+        os.environ.setdefault("LESS", "-R")
+        with console.pager(styles=True):
+            console.print(md)
+    else:
+        console.print(md)
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="innomd",
+        description="Markdown-Viewer mit LaTeX-Mathe-Unterstützung (Unicode-Konvertierung).",
+    )
+    p.add_argument("file", nargs="?", help="Markdown-Datei (sonst stdin)")
+    p.add_argument("-P", "--no-pager", action="store_true", help="ohne Pager ausgeben")
+    p.add_argument("-r", "--raw", action="store_true", help="vorverarbeitetes Markdown ohne Render")
+    p.add_argument("-w", "--width", type=int, default=None, help="Breite in Spalten")
+    p.add_argument("-t", "--theme", default="monokai", help="Codeblock-Theme (pygments)")
+    args = p.parse_args()
+
+    try:
+        text = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
+    except FileNotFoundError:
+        print(f"innomd: Datei nicht gefunden: {args.file}", file=sys.stderr)
+        return 1
+    except UnicodeDecodeError as e:
+        print(f"innomd: Kodierungsfehler: {e}", file=sys.stderr)
+        return 1
+
+    processed = preprocess(text)
+
+    if args.raw:
+        sys.stdout.write(processed)
+        return 0
+
+    try:
+        render(processed, args.width, args.no_pager, args.theme)
+    except ImportError:
+        print("innomd: 'rich' fehlt — installieren mit: pip install rich", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
