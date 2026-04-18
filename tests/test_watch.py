@@ -67,5 +67,154 @@ class TestStatusLine(unittest.TestCase):
         self.assertLessEqual(len(out), 40)
 
 
+class TestHighlightMatches(unittest.TestCase):
+    def test_highlights_plain(self):
+        import re
+        pat = re.compile("bar")
+        out = innomd._highlight_matches("foo bar baz", pat)
+        self.assertIn("\x1b[7m", out)
+        self.assertIn("\x1b[27m", out)
+        self.assertIn("bar", out)
+
+    def test_no_match_returns_line_unchanged(self):
+        import re
+        pat = re.compile("zzz")
+        line = "\x1b[31mred text\x1b[0m"
+        self.assertEqual(innomd._highlight_matches(line, pat), line)
+
+    def test_highlights_inside_ansi(self):
+        import re
+        pat = re.compile("world")
+        line = "\x1b[1mhello world\x1b[0m"
+        out = innomd._highlight_matches(line, pat)
+        # original ANSI codes preserved
+        self.assertIn("\x1b[1m", out)
+        self.assertIn("\x1b[0m", out)
+        # highlight opens before match and closes at/after end-of-match
+        self.assertIn("\x1b[7mworld", out)
+        self.assertIn("\x1b[27m", out)
+        # reverse-on sits between the opening bold and the match
+        self.assertLess(out.index("\x1b[7m"), out.index("world"))
+
+
+class TestSearch(unittest.TestCase):
+    def _mk_state(self):
+        s = innomd._WatchState("/tmp/x.md", None, "default", None)
+        s.lines = ["apple", "banana", "cherry", "banana split", "date"]
+        s.cols = 80
+        s.rows = 3  # body_rows = 2, so offsets up to 3 are reachable
+        return s
+
+    def test_search_populates_matches(self):
+        s = self._mk_state()
+        innomd._do_search(s, "banana")
+        self.assertEqual(s.match_lines, [1, 3])
+
+    def test_search_no_match(self):
+        s = self._mk_state()
+        innomd._do_search(s, "zzz")
+        self.assertEqual(s.match_lines, [])
+        self.assertIn("no match", s.status_msg)
+
+    def test_empty_pattern_clears(self):
+        s = self._mk_state()
+        innomd._do_search(s, "banana")
+        innomd._do_search(s, "")
+        self.assertIsNone(s.search_pattern)
+        self.assertEqual(s.match_lines, [])
+
+    def test_bad_regex_sets_status(self):
+        s = self._mk_state()
+        innomd._do_search(s, "(unclosed")
+        self.assertIsNone(s.search_pattern)
+        self.assertIn("bad regex", s.status_msg)
+
+    def test_search_is_case_insensitive(self):
+        s = self._mk_state()
+        innomd._do_search(s, "APPLE")
+        self.assertEqual(s.match_lines, [0])
+
+    def test_jump_to_next_cycles(self):
+        s = self._mk_state()
+        innomd._do_search(s, "banana")
+        # first match is line 1, jumps there
+        self.assertEqual(s.offset, 1)
+        with s.lock:
+            innomd._jump_to_match(s, forward=True)
+        self.assertEqual(s.offset, 3)
+        with s.lock:
+            innomd._jump_to_match(s, forward=True)
+        self.assertEqual(s.offset, 1)  # wraps
+
+    def test_jump_to_prev(self):
+        s = self._mk_state()
+        innomd._do_search(s, "banana")
+        # after initial jump, offset = 1
+        with s.lock:
+            innomd._jump_to_match(s, forward=False)
+        self.assertEqual(s.offset, 3)  # wraps backward
+
+
+class TestPromptKeys(unittest.TestCase):
+    def _mk(self):
+        s = innomd._WatchState("/tmp/x.md", None, "default", None)
+        s.lines = ["one", "two", "three"]
+        s.cols, s.rows = 80, 24
+        return s
+
+    def test_slash_enters_prompt(self):
+        s = self._mk()
+        innomd._handle_key(s, "/")
+        self.assertEqual(s.mode, "prompt")
+        self.assertEqual(s.prompt_prefix, "/")
+
+    def test_colon_enters_prompt(self):
+        s = self._mk()
+        innomd._handle_key(s, ":")
+        self.assertEqual(s.mode, "prompt")
+        self.assertEqual(s.prompt_prefix, ":")
+
+    def test_prompt_types_and_submits_search(self):
+        s = self._mk()
+        innomd._handle_key(s, "/")
+        for c in "two":
+            innomd._handle_key(s, c)
+        self.assertEqual(s.prompt_buffer, "two")
+        innomd._handle_key(s, "\r")
+        self.assertEqual(s.mode, "normal")
+        self.assertEqual(s.match_lines, [1])
+
+    def test_prompt_backspace(self):
+        s = self._mk()
+        innomd._handle_key(s, "/")
+        for c in "tax":
+            innomd._handle_key(s, c)
+        innomd._handle_key(s, "\x7f")
+        self.assertEqual(s.prompt_buffer, "ta")
+
+    def test_prompt_escape_cancels(self):
+        s = self._mk()
+        innomd._handle_key(s, "/")
+        innomd._handle_key(s, "x")
+        innomd._handle_key(s, "\x1b")
+        self.assertEqual(s.mode, "normal")
+        self.assertEqual(s.prompt_buffer, "")
+
+    def test_colon_q_quits(self):
+        s = self._mk()
+        innomd._handle_key(s, ":")
+        innomd._handle_key(s, "q")
+        action = innomd._handle_key(s, "\r")
+        self.assertEqual(action, "quit")
+
+    def test_colon_unknown_sets_status(self):
+        s = self._mk()
+        innomd._handle_key(s, ":")
+        for c in "foo":
+            innomd._handle_key(s, c)
+        innomd._handle_key(s, "\r")
+        self.assertIn("unknown", s.status_msg)
+
+
 if __name__ == "__main__":
     unittest.main()

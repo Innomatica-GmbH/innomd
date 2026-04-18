@@ -455,6 +455,11 @@ class _WatchState:
         self.stop = threading.Event()
         self.resize_pending = False
         self.status_msg = ""
+        self.mode = "normal"
+        self.prompt_prefix = ""
+        self.prompt_buffer = ""
+        self.search_pattern: re.Pattern | None = None
+        self.match_lines: list[int] = []
 
 
 def _render_lines(state: _WatchState) -> list[str]:
@@ -483,6 +488,86 @@ def _render_lines(state: _WatchState) -> list[str]:
     return buf.getvalue().rstrip("\n").split("\n")
 
 
+def _highlight_matches(line: str, pattern: re.Pattern) -> str:
+    stripped = _ansi_strip(line)
+    matches = list(pattern.finditer(stripped))
+    if not matches:
+        return line
+    starts = {m.start() for m in matches}
+    ends = {m.end() for m in matches}
+    out: list[str] = []
+    vis = 0
+    i = 0
+    n = len(line)
+    while i < n:
+        if line[i] == "\x1b":
+            m = ANSI_RE.match(line, i)
+            if m:
+                out.append(m.group(0))
+                i = m.end()
+                continue
+        if vis in ends:
+            out.append("\x1b[27m")
+        if vis in starts:
+            out.append("\x1b[7m")
+        out.append(line[i])
+        vis += 1
+        i += 1
+    if vis in ends:
+        out.append("\x1b[27m")
+    return "".join(out)
+
+
+def _recompute_matches(state: _WatchState) -> None:
+    """Caller must hold state.lock."""
+    if state.search_pattern is None:
+        state.match_lines = []
+        return
+    state.match_lines = [i for i, line in enumerate(state.lines)
+                         if state.search_pattern.search(_ansi_strip(line))]
+
+
+def _jump_to_match(state: _WatchState, forward: bool, include_current: bool = False) -> None:
+    """Caller must hold state.lock."""
+    if not state.match_lines:
+        return
+    if forward:
+        start = state.offset if include_current else state.offset + 1
+        nxt = next((i for i in state.match_lines if i >= start), state.match_lines[0])
+    else:
+        nxt = next((i for i in reversed(state.match_lines) if i < state.offset),
+                   state.match_lines[-1])
+    state.offset = nxt
+    _clamp_offset(state)
+
+
+def _do_search(state: _WatchState, pattern_text: str) -> None:
+    if not pattern_text:
+        with state.lock:
+            state.search_pattern = None
+            state.match_lines = []
+        state.status_msg = ""
+        return
+    try:
+        pat = re.compile(pattern_text, re.IGNORECASE)
+    except re.error as e:
+        with state.lock:
+            state.search_pattern = None
+            state.match_lines = []
+        state.status_msg = f"bad regex: {e}"
+        return
+    with state.lock:
+        state.search_pattern = pat
+        _recompute_matches(state)
+        matched = len(state.match_lines)
+        if matched:
+            _jump_to_match(state, forward=True, include_current=True)
+    if matched:
+        state.status_msg = f"{matched} match(es) · n/N"
+    else:
+        state.status_msg = f"no match for /{pattern_text}/"
+
+
 def _clamp_offset(state: _WatchState) -> None:
     body_rows = max(1, state.rows - 1)
     max_offset = max(0, len(state.lines) - body_rows)
@@ -497,12 +582,9 @@ def _status_line(state: _WatchState) -> str:
     ts = time.strftime("%H:%M:%S", time.localtime(state.last_reload))
     left = (f" {state.file.name} · {state.offset + 1}-{bottom}/{total} "
             f"({pct}%) · {state.theme_name} · {ts} ")
-    hints = " j/k ↑↓  space/b  g/G  q "
+    hints = " j/k ↑↓ space/b g/G / :q "
     msg = state.status_msg
-    if msg:
-        middle = f"  {msg}  "
-    else:
-        middle = ""
+    middle = f"  {msg}  " if msg else ""
     pad = max(1, state.cols - len(left) - len(middle) - len(hints))
     return (left + middle + " " * pad + hints)[:state.cols]
 
@@ -511,17 +593,31 @@ def _draw(state: _WatchState) -> None:
     with state.lock:
         body_rows = max(1, state.rows - 1)
         visible = state.lines[state.offset:state.offset + body_rows]
+        pattern = state.search_pattern
         status = _status_line(state)
         rows = state.rows
-    out = ["\x1b[H"]
+        cols = state.cols
+        mode = state.mode
+        prompt_prefix = state.prompt_prefix
+        prompt_buffer = state.prompt_buffer
+    out = ["\x1b[?25l\x1b[H"]
     for line in visible:
+        if pattern is not None:
+            line = _highlight_matches(line, pattern)
         out.append(line)
         out.append("\x1b[K\n")
     for _ in range(body_rows - len(visible)):
         out.append("\x1b[K\n")
-    out.append(f"\x1b[{rows};1H\x1b[7m")
-    out.append(status)
-    out.append("\x1b[0m\x1b[K")
+    out.append(f"\x1b[{rows};1H")
+    if mode == "prompt":
+        prompt = (prompt_prefix + prompt_buffer)[:cols - 1]
+        out.append(prompt)
+        out.append("\x1b[K")
+        out.append("\x1b[?25h")  # show cursor while prompting
+    else:
+        out.append("\x1b[7m")
+        out.append(status)
+        out.append("\x1b[0m\x1b[K")
     sys.stdout.write("".join(out))
     sys.stdout.flush()
 
@@ -540,6 +636,7 @@ def _watcher_thread(state: _WatchState) -> None:
                 state.lines = lines
                 state.last_reload = time.time()
                 _clamp_offset(state)
+                _recompute_matches(state)
             state.dirty.set()
         state.stop.wait(0.3)
 
@@ -570,7 +667,67 @@ def _read_key(timeout: float) -> str | None:
     return seq
 
 
+def _handle_prompt_key(state: _WatchState, key: str) -> str | None:
+    if key == "\x1b":
+        state.mode = "normal"
+        state.prompt_buffer = ""
+        state.status_msg = ""
+        return "redraw"
+    if key in ("\r", "\n"):
+        prefix, buf = state.prompt_prefix, state.prompt_buffer
+        state.mode = "normal"
+        state.prompt_buffer = ""
+        if prefix == "/":
+            _do_search(state, buf)
+        elif prefix == ":":
+            cmd = buf.strip()
+            if cmd in ("q", "quit"):
+                return "quit"
+            if cmd in ("r", "reload"):
+                lines = _render_lines(state)
+                with state.lock:
+                    state.lines = lines
+                    state.last_reload = time.time()
+                    _clamp_offset(state)
+                    _recompute_matches(state)
+                state.status_msg = "reloaded"
+            elif cmd == "":
+                state.status_msg = ""
+            else:
+                state.status_msg = f"unknown command: :{cmd}"
+        return "redraw"
+    if key in ("\x7f", "\x08"):
+        state.prompt_buffer = state.prompt_buffer[:-1]
+        return "redraw"
+    if len(key) == 1 and key >= " " and key != "\x7f":
+        state.prompt_buffer += key
+        return "redraw"
+    return None
+
+
 def _handle_key(state: _WatchState, key: str) -> str | None:
+    if state.mode == "prompt":
+        return _handle_prompt_key(state, key)
+    if key == "/":
+        state.mode = "prompt"
+        state.prompt_prefix = "/"
+        state.prompt_buffer = ""
+        state.status_msg = ""
+        return "redraw"
+    if key == ":":
+        state.mode = "prompt"
+        state.prompt_prefix = ":"
+        state.prompt_buffer = ""
+        state.status_msg = ""
+        return "redraw"
+    if key == "n":
+        with state.lock:
+            _jump_to_match(state, forward=True)
+        return "redraw"
+    if key == "N":
+        with state.lock:
+            _jump_to_match(state, forward=False)
+        return "redraw"
     with state.lock:
         body_rows = max(1, state.rows - 1)
         page = max(1, body_rows - 1)
@@ -634,6 +791,7 @@ def watch_loop(file: str, width: int | None, theme_name: str,
                 with state.lock:
                     state.lines = lines
                     _clamp_offset(state)
+                    _recompute_matches(state)
                 state.dirty.set()
             if state.dirty.is_set():
                 state.dirty.clear()
