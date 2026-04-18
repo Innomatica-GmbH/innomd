@@ -2,6 +2,8 @@
 """innomd — CLI Markdown-Viewer mit LaTeX-Mathe-Unterstützung."""
 from __future__ import annotations
 
+__version__ = "0.2.0"
+
 import argparse
 import io
 import json
@@ -857,6 +859,8 @@ def main() -> int:
     p.add_argument("-W", "--watch", action="store_true",
                    help="live-reload: re-render when the file changes")
     p.add_argument("--list-themes", action="store_true", help="list available themes and exit")
+    p.add_argument("-V", "--version", action="version",
+                   version=f"innomd {__version__}")
     args = p.parse_args()
 
     if args.list_themes:

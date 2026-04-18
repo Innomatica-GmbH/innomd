@@ -33,6 +33,14 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("usage:", r.stdout.lower())
 
+    def test_version_exits_zero(self):
+        r = run(["--version"])
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("innomd", r.stdout)
+        # semver-ish: N.N.N somewhere
+        import re as _re
+        self.assertRegex(r.stdout, r"\d+\.\d+\.\d+")
+
     def test_list_themes(self):
         r = run(["--list-themes"])
         self.assertEqual(r.returncode, 0)
