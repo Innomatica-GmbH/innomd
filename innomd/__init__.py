@@ -1,8 +1,8 @@
-#!/usr/bin/env python3
-"""innomd — CLI Markdown-Viewer mit LaTeX-Mathe-Unterstützung."""
+"""innomd — terminal Markdown viewer with LaTeX math support."""
 from __future__ import annotations
 
 __version__ = "0.2.0"
+__all__ = ["main", "__version__"]
 
 import argparse
 import io
@@ -905,7 +905,3 @@ def main() -> int:
               file=sys.stderr)
         return 1
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

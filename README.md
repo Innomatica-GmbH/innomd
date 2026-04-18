@@ -88,16 +88,20 @@ renders as
 
 ## Installation
 
-Requires Python 3.9+ and [rich](https://pypi.org/project/rich/).
+Requires Python 3.9+.
+
+```bash
+pip install innomd
+```
+
+That installs the `innomd` command on your `$PATH`. To install from
+source (e.g. a specific commit or for development):
 
 ```bash
 git clone https://github.com/Innomatica-GmbH/innomd.git
 cd innomd
-pip install -r requirements.txt
-ln -s "$(pwd)/innomd" ~/.local/bin/innomd
+pip install .            # or: pip install -e .   (editable)
 ```
-
-Or drop `innomd` anywhere on your `$PATH`.
 
 ### Windows (via WSL)
 
@@ -112,10 +116,8 @@ wsl --install -d Ubuntu
 Then inside your Ubuntu shell:
 
 ```bash
-sudo apt install -y python3-pip git
-git clone https://github.com/Innomatica-GmbH/innomd.git
-cd innomd && pip install -r requirements.txt
-ln -s "$(pwd)/innomd" ~/.local/bin/innomd
+sudo apt install -y python3-pip
+pip install innomd
 ```
 
 Open a WSL tab in Windows Terminal — everything including watch mode,

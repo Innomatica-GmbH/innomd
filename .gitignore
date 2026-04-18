@@ -6,3 +6,5 @@ venv/
 .env
 .DS_Store
 *.swp
+build/
+dist/

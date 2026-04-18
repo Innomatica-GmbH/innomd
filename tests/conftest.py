@@ -1,14 +1,12 @@
-"""Load the innomd script as a module so tests can import its functions."""
-import importlib.util
-from importlib.machinery import SourceFileLoader
+"""Put the repo root on sys.path so `import innomd` works in tests."""
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def load_innomd():
-    path = Path(__file__).resolve().parent.parent / "innomd"
-    loader = SourceFileLoader("innomd_mod", str(path))
-    spec = importlib.util.spec_from_loader("innomd_mod", loader)
-    assert spec and spec.loader, f"could not load {path}"
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    import innomd
+    return innomd

@@ -2,11 +2,12 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-INNOMD = Path(__file__).resolve().parent.parent / "innomd"
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def run(args, input_text=None, env=None, timeout=10):
@@ -14,10 +15,13 @@ def run(args, input_text=None, env=None, timeout=10):
     proc_env.setdefault("TERM", "xterm-256color")
     proc_env.setdefault("NO_COLOR", "1")  # plain output, easier to assert on
     proc_env.setdefault("COLUMNS", "100")
+    # Ensure the package is importable without installation
+    existing = proc_env.get("PYTHONPATH", "")
+    proc_env["PYTHONPATH"] = str(ROOT) + (os.pathsep + existing if existing else "")
     if env:
         proc_env.update(env)
     result = subprocess.run(
-        ["python3", str(INNOMD), *args],
+        [sys.executable, "-m", "innomd", *args],
         input=input_text,
         capture_output=True,
         text=True,
