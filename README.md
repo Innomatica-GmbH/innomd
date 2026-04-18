@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/innomatica-logo.png" alt="Innomatica GmbH" width="96">
+  <img src="assets/innomd-mark-512.png" alt="innomd" width="120">
 </p>
 
 <h1 align="center">innomd — Terminal Markdown Viewer with LaTeX Math Support</h1>
