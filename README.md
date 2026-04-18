@@ -88,19 +88,37 @@ renders as
 
 ## Installation
 
-Requires Python 3.9+.
+Requires Python 3.9+. The recommended way is [pipx](https://pipx.pypa.io/),
+which installs `innomd` into its own virtual environment and exposes the
+command on your `$PATH`:
 
 ```bash
-pip install innomd
+pipx install innomd
 ```
 
-That installs the `innomd` command on your `$PATH`. To install from
-source (e.g. a specific commit or for development):
+On Ubuntu/Debian, if `pipx` is not yet available:
+
+```bash
+sudo apt install -y pipx && pipx ensurepath
+```
+
+Why not plain `pip`? Modern Linux distributions (Debian, Ubuntu,
+Fedora, …) ship Python as PEP 668 *externally managed* and will reject
+`sudo pip install`. Either use `pipx` (recommended) or install into a
+virtual environment:
+
+```bash
+python3 -m venv ~/.venvs/innomd
+~/.venvs/innomd/bin/pip install innomd
+ln -s ~/.venvs/innomd/bin/innomd ~/.local/bin/innomd
+```
+
+To install from source (e.g. a specific commit or for development):
 
 ```bash
 git clone https://github.com/Innomatica-GmbH/innomd.git
 cd innomd
-pip install .            # or: pip install -e .   (editable)
+pipx install .           # or: pip install -e .   (editable, inside a venv)
 ```
 
 ### Windows (via WSL)
@@ -116,8 +134,8 @@ wsl --install -d Ubuntu
 Then inside your Ubuntu shell:
 
 ```bash
-sudo apt install -y python3-pip
-pip install innomd
+sudo apt install -y pipx && pipx ensurepath
+pipx install innomd
 ```
 
 Open a WSL tab in Windows Terminal — everything including watch mode,
