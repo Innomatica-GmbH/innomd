@@ -20,9 +20,11 @@
 
 <p align="center">
   <a href="https://github.com/Innomatica-GmbH/innomd/actions/workflows/tests.yml"><img alt="Tests" src="https://github.com/Innomatica-GmbH/innomd/actions/workflows/tests.yml/badge.svg"></a>
+  <a href="https://pypi.org/project/innomd/"><img alt="PyPI" src="https://img.shields.io/pypi/v/innomd.svg?color=2567af"></a>
   <img alt="License" src="https://img.shields.io/badge/license-MIT-blue.svg">
   <img alt="Python" src="https://img.shields.io/badge/python-3.9%2B-blue.svg">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg">
+  <a href="https://innomatica.de"><img alt="by Innomatica" src="https://img.shields.io/badge/by-Innomatica%20GmbH-2567af"></a>
 </p>
 
 ---

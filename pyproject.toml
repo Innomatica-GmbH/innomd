@@ -47,6 +47,7 @@ Homepage = "https://github.com/Innomatica-GmbH/innomd"
 Repository = "https://github.com/Innomatica-GmbH/innomd"
 Issues = "https://github.com/Innomatica-GmbH/innomd/issues"
 Changelog = "https://github.com/Innomatica-GmbH/innomd/releases"
+Organization = "https://innomatica.de"
 
 [project.scripts]
 innomd = "innomd:main"
