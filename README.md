@@ -50,6 +50,8 @@ renders as
 - Scientists, engineers, and students who keep notes in Markdown with
   embedded LaTeX math and want to read them in a terminal instead of a
   browser.
+- Data scientists and ML engineers who want to skim `.ipynb` notebooks
+  without starting Jupyter.
 - Developers writing technical documentation (physics, ML, signal
   processing) who already use tools like `glow`, `mdcat`, or `bat` and
   miss proper math rendering.
@@ -65,13 +67,21 @@ renders as
   - Sub- and superscripts, including nested braces
   - `\text{…}`, `\vec`, `\hat`, `\bar`, `\dot`
   - Blackboard bold (`\mathbb{R}`, `\mathbb{N}`, `\mathbb{Z}`, …)
+- **Jupyter notebook support** — pass any `.ipynb` file and it's rendered as
+  Markdown: cells, code with syntax highlighting, stream and execution
+  outputs.
+- **Live reload** — `innomd --watch file.md` re-renders on every save, ideal
+  for writing notes in one pane and previewing in another.
+- **Theme presets** — 9 built-in color themes: `default`, `nord`, `dracula`,
+  `gruvbox`, `solarized-dark`, `solarized-light`, `tokyonight`, `github`,
+  `mono`. List with `innomd --list-themes`.
 - **Rich Markdown rendering** via [rich](https://github.com/Textualize/rich):
-  headings, lists, blockquotes, links, syntax-highlighted code blocks
-- **Beautiful tables** with rounded Unicode borders and column alignment
-- **Subtle horizontal rules** (`---` renders as centered `· · ·`)
-- **Pager integration** (`less -R`) with automatic TTY detection
-- **Code-block safe** — math inside fenced code blocks is never substituted
-- **Pure Python** — one script, one dependency (`rich`), no Node, no Go toolchain
+  headings, lists, blockquotes, links, syntax-highlighted code blocks.
+- **Beautiful tables** with rounded Unicode borders and column alignment.
+- **Subtle horizontal rules** (`---` renders as centered `· · ·`).
+- **Pager integration** (`less -R`) with automatic TTY detection.
+- **Code-block safe** — math inside fenced code blocks is never substituted.
+- **Pure Python** — one script, one dependency (`rich`), no Node, no Go toolchain.
 
 ## Installation
 
@@ -89,22 +99,29 @@ Or drop `innomd` anywhere on your `$PATH`.
 ## Usage
 
 ```bash
-innomd README.md                 # render a file (uses pager on TTY)
-cat notes.md | innomd            # pipe from stdin
-innomd -P file.md                # no pager
-innomd -w 100 file.md            # fixed width
-innomd -r file.md                # raw preprocessed markdown
-innomd -t dracula file.md        # change code theme (pygments themes)
+innomd README.md                  # render a file (uses pager on TTY)
+innomd analysis.ipynb             # render a Jupyter notebook
+innomd --watch notes.md           # live-reload preview
+innomd -t dracula file.md         # use a preset theme
+innomd -t nord -c dracula file.md # preset + override code theme
+innomd --list-themes              # list available presets
+cat notes.md | innomd             # pipe from stdin
+innomd -P file.md                 # no pager
+innomd -w 100 file.md             # fixed width
+innomd -r file.md                 # raw preprocessed markdown
 ```
 
 ### Options
 
-| Flag                | Description                             |
-|---------------------|-----------------------------------------|
-| `-P`, `--no-pager`  | Print directly, no pager                |
-| `-r`, `--raw`       | Output preprocessed markdown, no render |
-| `-w N`, `--width N` | Force terminal width in columns         |
-| `-t`, `--theme`     | Pygments code theme (default `monokai`) |
+| Flag                    | Description                                   |
+|-------------------------|-----------------------------------------------|
+| `-P`, `--no-pager`      | Print directly, no pager                      |
+| `-r`, `--raw`           | Output preprocessed markdown, no render       |
+| `-w N`, `--width N`     | Force terminal width in columns               |
+| `-t`, `--theme`         | Preset theme (see `--list-themes`)            |
+| `-c`, `--code-theme`    | Override Pygments code theme only             |
+| `-W`, `--watch`         | Live-reload: re-render on file change         |
+| `--list-themes`         | List available preset themes                  |
 
 ## Comparison
 

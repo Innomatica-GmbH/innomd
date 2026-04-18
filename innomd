@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
+import signal
 import sys
+import time
 from pathlib import Path
 
 GREEK = {
@@ -69,6 +73,117 @@ SUBSCRIPT = str.maketrans(
     "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ",
 )
 
+THEMES: dict[str, dict[str, str]] = {
+    "default": {
+        "code": "monokai",
+        "header": "bold cyan",
+        "border": "dim",
+        "hr": "dim",
+        "h1": "bold magenta",
+        "h2": "bold cyan",
+        "h3": "bold green",
+        "link": "underline blue",
+        "code_inline": "bold yellow",
+        "blockquote": "italic grey70",
+    },
+    "nord": {
+        "code": "nord-darker",
+        "header": "bold #88C0D0",
+        "border": "#4C566A",
+        "hr": "#5E81AC",
+        "h1": "bold #88C0D0",
+        "h2": "bold #8FBCBB",
+        "h3": "bold #A3BE8C",
+        "link": "underline #81A1C1",
+        "code_inline": "bold #EBCB8B",
+        "blockquote": "italic #D8DEE9",
+    },
+    "dracula": {
+        "code": "dracula",
+        "header": "bold #BD93F9",
+        "border": "#6272A4",
+        "hr": "#FF79C6",
+        "h1": "bold #FF79C6",
+        "h2": "bold #BD93F9",
+        "h3": "bold #50FA7B",
+        "link": "underline #8BE9FD",
+        "code_inline": "bold #F1FA8C",
+        "blockquote": "italic #6272A4",
+    },
+    "gruvbox": {
+        "code": "gruvbox-dark",
+        "header": "bold #FABD2F",
+        "border": "#665C54",
+        "hr": "#928374",
+        "h1": "bold #FB4934",
+        "h2": "bold #FABD2F",
+        "h3": "bold #B8BB26",
+        "link": "underline #83A598",
+        "code_inline": "bold #D3869B",
+        "blockquote": "italic #A89984",
+    },
+    "solarized-dark": {
+        "code": "solarized-dark",
+        "header": "bold #2AA198",
+        "border": "#586E75",
+        "hr": "#657B83",
+        "h1": "bold #268BD2",
+        "h2": "bold #2AA198",
+        "h3": "bold #859900",
+        "link": "underline #6C71C4",
+        "code_inline": "bold #B58900",
+        "blockquote": "italic #93A1A1",
+    },
+    "solarized-light": {
+        "code": "solarized-light",
+        "header": "bold #268BD2",
+        "border": "#93A1A1",
+        "hr": "#93A1A1",
+        "h1": "bold #D33682",
+        "h2": "bold #268BD2",
+        "h3": "bold #859900",
+        "link": "underline #6C71C4",
+        "code_inline": "bold #B58900",
+        "blockquote": "italic #586E75",
+    },
+    "tokyonight": {
+        "code": "one-dark",
+        "header": "bold #7AA2F7",
+        "border": "#3B4261",
+        "hr": "#565F89",
+        "h1": "bold #BB9AF7",
+        "h2": "bold #7AA2F7",
+        "h3": "bold #9ECE6A",
+        "link": "underline #2AC3DE",
+        "code_inline": "bold #E0AF68",
+        "blockquote": "italic #9AA5CE",
+    },
+    "github": {
+        "code": "github-dark",
+        "header": "bold #58A6FF",
+        "border": "#30363D",
+        "hr": "#484F58",
+        "h1": "bold #F78166",
+        "h2": "bold #58A6FF",
+        "h3": "bold #3FB950",
+        "link": "underline #58A6FF",
+        "code_inline": "bold #F8E3A1",
+        "blockquote": "italic #8B949E",
+    },
+    "mono": {
+        "code": "bw",
+        "header": "bold",
+        "border": "dim",
+        "hr": "dim",
+        "h1": "bold",
+        "h2": "bold",
+        "h3": "bold",
+        "link": "underline",
+        "code_inline": "reverse",
+        "blockquote": "italic",
+    },
+}
+
 
 def to_super(s: str) -> str:
     if s and all(c in "0123456789+-=()nabcdefghijklmoprstuvwxyzABDEGHIJKLMNOPRTUVW" for c in s):
@@ -86,23 +201,7 @@ def to_sub(s: str) -> str:
     return "_(" + s + ")"
 
 
-def strip_group(s: str) -> str:
-    """Find outermost {...} and return its content, else return s."""
-    if s.startswith("{") and s.endswith("}"):
-        depth = 0
-        for i, c in enumerate(s):
-            if c == "{":
-                depth += 1
-            elif c == "}":
-                depth -= 1
-                if depth == 0 and i != len(s) - 1:
-                    return s
-        return s[1:-1]
-    return s
-
-
 def balanced_groups(s: str, start: int) -> tuple[str, int] | None:
-    """Parse {...} starting at s[start], return (content, end_idx_exclusive)."""
     if start >= len(s) or s[start] != "{":
         return None
     depth = 0
@@ -117,13 +216,11 @@ def balanced_groups(s: str, start: int) -> tuple[str, int] | None:
 
 
 def replace_command_with_groups(text: str, name: str, n_args: int, fn) -> str:
-    """Replace occurrences of \\name{arg1}...{argN} using fn(args) -> str."""
     out = []
     i = 0
     pattern = "\\" + name
     while i < len(text):
         if text.startswith(pattern, i):
-            # Ensure not a longer command (e.g. \frac vs \fraction)
             after = i + len(pattern)
             if after < len(text) and text[after].isalpha():
                 out.append(text[i])
@@ -131,7 +228,6 @@ def replace_command_with_groups(text: str, name: str, n_args: int, fn) -> str:
                 continue
             args = []
             j = after
-            # Skip optional whitespace between command and arg
             while j < len(text) and text[j] == " ":
                 j += 1
             ok = True
@@ -153,11 +249,10 @@ def replace_command_with_groups(text: str, name: str, n_args: int, fn) -> str:
 
 def convert_math(tex: str) -> str:
     s = tex
-    # Strip \text-family wrappers, iteratively (handles nesting)
     for _ in range(3):
-        for cmd in ("text", "mathrm", "mathbf", "mathit", "mathsf", "mathtt", "operatorname", "textbf", "textit"):
+        for cmd in ("text", "mathrm", "mathbf", "mathit", "mathsf", "mathtt",
+                    "operatorname", "textbf", "textit"):
             s = replace_command_with_groups(s, cmd, 1, lambda a: a[0])
-    # Fractions (may recurse a couple of times)
     for _ in range(4):
         s = replace_command_with_groups(
             s, "frac", 2,
@@ -167,38 +262,33 @@ def convert_math(tex: str) -> str:
             s, "dfrac", 2,
             lambda a: (f"({a[0]})/({a[1]})" if any(c in a[0] + a[1] for c in "+-·× ") else f"{a[0]}/{a[1]}"),
         )
-        s = replace_command_with_groups(s, "tfrac", 2,
-            lambda a: (f"({a[0]})/({a[1]})" if any(c in a[0] + a[1] for c in "+-·× ") else f"{a[0]}/{a[1]}"))
-    # \sqrt[n]{x}
-    s = re.sub(r"\\sqrt\[([^\]]+)\]\{([^{}]+)\}", lambda m: to_super(m.group(1)) + "√(" + m.group(2) + ")", s)
+        s = replace_command_with_groups(
+            s, "tfrac", 2,
+            lambda a: (f"({a[0]})/({a[1]})" if any(c in a[0] + a[1] for c in "+-·× ") else f"{a[0]}/{a[1]}"),
+        )
+    s = re.sub(r"\\sqrt\[([^\]]+)\]\{([^{}]+)\}",
+               lambda m: to_super(m.group(1)) + "√(" + m.group(2) + ")", s)
     s = replace_command_with_groups(s, "sqrt", 1, lambda a: "√(" + a[0] + ")")
-    # \vec{x} → x⃗
     s = replace_command_with_groups(s, "vec", 1, lambda a: a[0] + "⃗")
     s = replace_command_with_groups(s, "hat", 1, lambda a: a[0] + "̂")
     s = replace_command_with_groups(s, "bar", 1, lambda a: a[0] + "̄")
     s = replace_command_with_groups(s, "dot", 1, lambda a: a[0] + "̇")
-    # Greek + operators, longest first to avoid prefix clashes
     items = sorted(list(GREEK.items()) + list(OPERATORS.items()), key=lambda x: -len(x[0]))
     for k, v in items:
         s = s.replace(k, v)
-    # Super/subscripts — braced form first
     s = re.sub(r"\^\{([^{}]+)\}", lambda m: to_super(m.group(1)), s)
     s = re.sub(r"_\{([^{}]+)\}", lambda m: to_sub(m.group(1)), s)
-    # Single-char form
     s = re.sub(r"\^(\\?[A-Za-z0-9+\-])", lambda m: to_super(m.group(1).lstrip("\\")), s)
     s = re.sub(r"_(\\?[A-Za-z0-9+\-])", lambda m: to_sub(m.group(1).lstrip("\\")), s)
-    # Drop remaining single-level braces (e.g. {,} in 2{,}898)
     prev = None
     while prev != s:
         prev = s
         s = re.sub(r"\{([^{}]*)\}", r"\1", s)
-    # Tidy whitespace
     s = re.sub(r"[ \t]+", " ", s).strip()
     return s
 
 
 def preprocess(text: str) -> str:
-    # Code fences: protect from math substitution
     fence_re = re.compile(r"(^```.*?^```)", re.DOTALL | re.MULTILINE)
     parts = fence_re.split(text)
     out = []
@@ -206,49 +296,84 @@ def preprocess(text: str) -> str:
         if part.startswith("```"):
             out.append(part)
             continue
-        # Block math $$...$$
-        part = re.sub(
-            r"\$\$(.+?)\$\$",
-            lambda m: "\n\n> **" + convert_math(m.group(1)) + "**\n\n",
-            part,
-            flags=re.DOTALL,
-        )
-        # \[ ... \]
-        part = re.sub(
-            r"\\\[(.+?)\\\]",
-            lambda m: "\n\n> **" + convert_math(m.group(1)) + "**\n\n",
-            part,
-            flags=re.DOTALL,
-        )
-        # Inline math $...$  (avoid empty and escaped)
-        part = re.sub(
-            r"(?<!\\)\$([^\$\n]+?)(?<!\\)\$",
-            lambda m: "`" + convert_math(m.group(1)) + "`",
-            part,
-        )
-        # \( ... \)
-        part = re.sub(
-            r"\\\((.+?)\\\)",
-            lambda m: "`" + convert_math(m.group(1)) + "`",
-            part,
-            flags=re.DOTALL,
-        )
+        part = re.sub(r"\$\$(.+?)\$\$",
+                      lambda m: "\n\n> **" + convert_math(m.group(1)) + "**\n\n",
+                      part, flags=re.DOTALL)
+        part = re.sub(r"\\\[(.+?)\\\]",
+                      lambda m: "\n\n> **" + convert_math(m.group(1)) + "**\n\n",
+                      part, flags=re.DOTALL)
+        part = re.sub(r"(?<!\\)\$([^\$\n]+?)(?<!\\)\$",
+                      lambda m: "`" + convert_math(m.group(1)) + "`", part)
+        part = re.sub(r"\\\((.+?)\\\)",
+                      lambda m: "`" + convert_math(m.group(1)) + "`",
+                      part, flags=re.DOTALL)
         out.append(part)
     return "".join(out)
 
 
-def render(text: str, width: int | None, no_pager: bool, theme: str) -> None:
+def ipynb_to_markdown(raw: str) -> str:
+    nb = json.loads(raw)
+    lang = (nb.get("metadata", {}).get("kernelspec", {}).get("language")
+            or nb.get("metadata", {}).get("language_info", {}).get("name")
+            or "python")
+    parts: list[str] = []
+    for cell in nb.get("cells", []):
+        ctype = cell.get("cell_type")
+        src = "".join(cell.get("source", []))
+        if ctype == "markdown":
+            parts.append(src)
+        elif ctype == "code":
+            parts.append(f"```{lang}\n{src}\n```")
+            for out in cell.get("outputs", []):
+                otype = out.get("output_type")
+                if otype == "stream":
+                    text = "".join(out.get("text", []))
+                    if text.strip():
+                        parts.append("```\n" + text.rstrip() + "\n```")
+                elif otype in ("execute_result", "display_data"):
+                    data = out.get("data", {})
+                    if "text/markdown" in data:
+                        parts.append("".join(data["text/markdown"]))
+                    elif "text/plain" in data:
+                        text = "".join(data["text/plain"])
+                        if text.strip():
+                            parts.append("```\n" + text.rstrip() + "\n```")
+                elif otype == "error":
+                    tb = "\n".join(out.get("traceback", []))
+                    tb = re.sub(r"\x1b\[[0-9;]*m", "", tb)
+                    parts.append("```\n" + tb + "\n```")
+        elif ctype == "raw":
+            parts.append(src)
+    return "\n\n".join(parts)
+
+
+def load_source(file: str | None) -> str:
+    if not file:
+        return sys.stdin.read()
+    path = Path(file)
+    raw = path.read_text(encoding="utf-8")
+    if path.suffix.lower() == ".ipynb":
+        return ipynb_to_markdown(raw)
+    return raw
+
+
+def build_renderer(theme_name: str, code_override: str | None):
     from rich import box
     from rich.align import Align
     from rich.console import Console
     from rich.markdown import Markdown, TableElement, HorizontalRule
     from rich.table import Table
     from rich.text import Text
+    from rich.theme import Theme
+
+    t = THEMES.get(theme_name, THEMES["default"])
+    code_theme = code_override or t["code"]
 
     class InnoTable(TableElement):
         def __rich_console__(self, console, options):
-            table = Table(box=box.ROUNDED, show_header=True, header_style="bold cyan",
-                          border_style="dim", pad_edge=True, expand=False)
+            table = Table(box=box.ROUNDED, show_header=True,
+                          header_style=t["header"], border_style=t["border"],
+                          pad_edge=True, expand=False)
             if self.header is not None and self.header.row is not None:
                 for column in self.header.row.cells:
                     table.add_column(column.content)
@@ -259,16 +384,31 @@ def render(text: str, width: int | None, no_pager: bool, theme: str) -> None:
 
     class InnoRule(HorizontalRule):
         def __rich_console__(self, console, options):
-            yield Align.center(Text("· · ·", style="dim"))
+            yield Align.center(Text("· · ·", style=t["hr"]))
 
     class InnoMarkdown(Markdown):
         elements = {**Markdown.elements, "table_open": InnoTable, "hr": InnoRule}
 
-    console = Console(width=width)
-    md = InnoMarkdown(text, code_theme=theme, hyperlinks=True)
-    use_pager = (not no_pager) and sys.stdout.isatty()
+    rich_theme = Theme({
+        "markdown.h1": t["h1"],
+        "markdown.h2": t["h2"],
+        "markdown.h3": t["h3"],
+        "markdown.h4": t["h3"],
+        "markdown.link": t["link"],
+        "markdown.link_url": t["link"],
+        "markdown.code": t["code_inline"],
+        "markdown.block_quote": t["blockquote"],
+    }, inherit=True)
+
+    return Console, InnoMarkdown, rich_theme, code_theme
+
+
+def render_once(text: str, width: int | None, theme_name: str, code_override: str | None,
+                use_pager: bool) -> None:
+    Console, InnoMarkdown, rich_theme, code_theme = build_renderer(theme_name, code_override)
+    console = Console(width=width, theme=rich_theme)
+    md = InnoMarkdown(text, code_theme=code_theme, hyperlinks=True)
     if use_pager:
-        import os
         os.environ.setdefault("LESS", "-R")
         with console.pager(styles=True):
             console.print(md)
@@ -276,25 +416,86 @@ def render(text: str, width: int | None, no_pager: bool, theme: str) -> None:
         console.print(md)
 
 
+def watch_loop(file: str, width: int | None, theme_name: str, code_override: str | None) -> int:
+    path = Path(file)
+    last_mtime = -1.0
+    sys.stdout.write("\x1b[?1049h")
+    sys.stdout.flush()
+    try:
+        while True:
+            try:
+                mtime = path.stat().st_mtime
+            except FileNotFoundError:
+                sys.stdout.write("\x1b[2J\x1b[H")
+                print(f"innomd: waiting for {path} to exist…", file=sys.stderr)
+                time.sleep(0.5)
+                continue
+            if mtime != last_mtime:
+                last_mtime = mtime
+                sys.stdout.write("\x1b[2J\x1b[H")
+                sys.stdout.flush()
+                try:
+                    text = load_source(file)
+                    processed = preprocess(text)
+                    render_once(processed, width, theme_name, code_override, use_pager=False)
+                except Exception as e:
+                    print(f"innomd watch: {e}", file=sys.stderr)
+                ts = time.strftime("%H:%M:%S")
+                print(f"\n\x1b[2m[watching {path.name} · last update {ts} · theme {theme_name} · Ctrl+C to exit]\x1b[0m",
+                      file=sys.stderr)
+            time.sleep(0.3)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        sys.stdout.write("\x1b[?1049l")
+        sys.stdout.flush()
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         prog="innomd",
-        description="Markdown-Viewer mit LaTeX-Mathe-Unterstützung (Unicode-Konvertierung).",
+        description="Terminal Markdown viewer with LaTeX math, Jupyter notebooks, themes, and live reload.",
     )
-    p.add_argument("file", nargs="?", help="Markdown-Datei (sonst stdin)")
-    p.add_argument("-P", "--no-pager", action="store_true", help="ohne Pager ausgeben")
-    p.add_argument("-r", "--raw", action="store_true", help="vorverarbeitetes Markdown ohne Render")
-    p.add_argument("-w", "--width", type=int, default=None, help="Breite in Spalten")
-    p.add_argument("-t", "--theme", default="monokai", help="Codeblock-Theme (pygments)")
+    p.add_argument("file", nargs="?", help="markdown or ipynb file (reads stdin if omitted)")
+    p.add_argument("-P", "--no-pager", action="store_true", help="do not page output")
+    p.add_argument("-r", "--raw", action="store_true", help="print preprocessed markdown without rendering")
+    p.add_argument("-w", "--width", type=int, default=None, help="terminal width in columns")
+    p.add_argument("-t", "--theme", default="default",
+                   help=f"preset theme: {', '.join(THEMES)}")
+    p.add_argument("-c", "--code-theme", default=None,
+                   help="override pygments code theme (e.g. monokai, dracula, nord)")
+    p.add_argument("-W", "--watch", action="store_true",
+                   help="live-reload: re-render when the file changes")
+    p.add_argument("--list-themes", action="store_true", help="list available themes and exit")
     args = p.parse_args()
 
+    if args.list_themes:
+        for name in THEMES:
+            print(name)
+        return 0
+
+    if args.theme not in THEMES:
+        print(f"innomd: unknown theme '{args.theme}'. Available: {', '.join(THEMES)}",
+              file=sys.stderr)
+        return 1
+
+    if args.watch:
+        if not args.file:
+            print("innomd: --watch requires a file argument", file=sys.stderr)
+            return 1
+        signal.signal(signal.SIGINT, lambda *a: sys.exit(0))
+        return watch_loop(args.file, args.width, args.theme, args.code_theme)
+
     try:
-        text = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
+        text = load_source(args.file)
     except FileNotFoundError:
-        print(f"innomd: Datei nicht gefunden: {args.file}", file=sys.stderr)
+        print(f"innomd: file not found: {args.file}", file=sys.stderr)
         return 1
     except UnicodeDecodeError as e:
-        print(f"innomd: Kodierungsfehler: {e}", file=sys.stderr)
+        print(f"innomd: encoding error: {e}", file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as e:
+        print(f"innomd: invalid notebook JSON: {e}", file=sys.stderr)
         return 1
 
     processed = preprocess(text)
@@ -304,9 +505,11 @@ def main() -> int:
         return 0
 
     try:
-        render(processed, args.width, args.no_pager, args.theme)
+        use_pager = (not args.no_pager) and sys.stdout.isatty()
+        render_once(processed, args.width, args.theme, args.code_theme, use_pager)
     except ImportError:
-        print("innomd: 'rich' fehlt — installieren mit: pip install rich", file=sys.stderr)
+        print("innomd: 'rich' is not installed — install with: pip install rich",
+              file=sys.stderr)
         return 1
     return 0
 
