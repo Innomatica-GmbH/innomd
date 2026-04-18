@@ -71,8 +71,10 @@ renders as
 - **Jupyter notebook support** — pass any `.ipynb` file and it's rendered as
   Markdown: cells, code with syntax highlighting, stream and execution
   outputs.
-- **Live reload** — `innomd --watch file.md` re-renders on every save, ideal
-  for writing notes in one pane and previewing in another.
+- **Live reload** — `innomd --watch file.md` opens an interactive viewer
+  that re-renders on every save and lets you scroll, search, and jump
+  between matches — ideal for writing notes in one pane and previewing
+  in another.
 - **Theme presets** — 9 built-in color themes: `default`, `nord`, `dracula`,
   `gruvbox`, `solarized-dark`, `solarized-light`, `tokyonight`, `github`,
   `mono`. List with `innomd --list-themes`.
@@ -123,6 +125,32 @@ innomd -r file.md                 # raw preprocessed markdown
 | `-c`, `--code-theme`    | Override Pygments code theme only             |
 | `-W`, `--watch`         | Live-reload: re-render on file change         |
 | `--list-themes`         | List available preset themes                  |
+
+### Watch mode
+
+`innomd --watch file.md` opens a scrollable viewer that reloads on file
+changes while keeping your scroll position. It's a small `less`-like
+pager, no external dependencies.
+
+| Key | Action |
+|-----|--------|
+| `j`, `↓` | line down |
+| `k`, `↑` | line up |
+| `space`, `PgDn` | page down |
+| `b`, `PgUp` | page up |
+| `g`, `Home` | jump to top |
+| `G`, `End` | jump to bottom |
+| `/pattern` + `Enter` | case-insensitive regex search |
+| `n` / `N` | next / previous match |
+| `:q` + `Enter` *or* `q` | quit |
+| `:reload` *or* `:r` | force re-render |
+| `Esc` | cancel `/` or `:` prompt |
+| mouse wheel | scroll (3 lines per tick) |
+
+Mouse scrolling uses SGR reporting (xterm 1006). Inside tmux, add
+`set -g mouse on` to your `~/.tmux.conf`. When mouse reporting is
+active, hold `Shift` to select text with the mouse — standard
+xterm behaviour shared with `less`, `htop`, `vim`.
 
 ## Comparison
 
