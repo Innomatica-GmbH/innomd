@@ -128,13 +128,13 @@ innomd -r file.md                 # raw preprocessed markdown
 
 How `innomd` stacks up against other terminal Markdown viewers:
 
-| Tool     | LaTeX math | Tables | Code highlighting | Images | Language |
-|----------|:----------:|:------:|:-----------------:|:------:|:--------:|
-| **innomd** | ✅ (Unicode) | ✅ | ✅ | — | Python |
-| glow     | ❌ | ✅ | ✅ | — | Go |
-| mdcat    | ❌ | ✅ | ✅ | ✅ (Kitty/iTerm2) | Rust |
-| bat      | ❌ | ❌ | ✅ (syntax only) | — | Rust |
-| frogmouth | ❌ | ✅ | ✅ | — | Python |
+| Tool       | LaTeX math | Jupyter `.ipynb` | Live reload | Tables | Code highlighting | Images | Language |
+|------------|:----------:|:----------------:|:-----------:|:------:|:-----------------:|:------:|:--------:|
+| **innomd** | ✅ (Unicode) | ✅ | ✅ | ✅ | ✅ | — | Python |
+| glow       | ❌ | ❌ | ❌ | ✅ | ✅ | — | Go |
+| mdcat      | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ (Kitty/iTerm2) | Rust |
+| bat        | ❌ | ❌ | ❌ | ❌ | ✅ (syntax only) | — | Rust |
+| frogmouth  | ❌ | ❌ | ❌ | ✅ | ✅ | — | Python |
 
 If you don't write formulas, use `glow` or `mdcat` — they're excellent.
 If you do, this tool exists because nothing else did the job in the terminal.
