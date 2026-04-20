@@ -645,29 +645,53 @@ def _watcher_thread(state: _WatchState) -> None:
         state.stop.wait(0.3)
 
 
-def _read_key(timeout: float) -> str | None:
+def _read_fd_byte(fd: int) -> str:
     try:
-        r, _, _ = select.select([sys.stdin], [], [], timeout)
+        data = os.read(fd, 1)
+    except (OSError, BlockingIOError):
+        return ""
+    if not data:
+        return ""
+    return data.decode("utf-8", errors="replace")
+
+
+def _read_key(timeout: float | None) -> str | None:
+    fd = sys.stdin.fileno()
+    try:
+        r, _, _ = select.select([fd], [], [], timeout)
     except (InterruptedError, OSError):
         return None
     if not r:
         return None
-    ch = sys.stdin.read(1)
+    ch = _read_fd_byte(fd)
+    if not ch:
+        return None
     if ch != "\x1b":
         return ch
-    r, _, _ = select.select([sys.stdin], [], [], 0.02)
+    r, _, _ = select.select([fd], [], [], 0.08)
     if not r:
         return "\x1b"
-    seq = "\x1b" + sys.stdin.read(1)
+    nxt = _read_fd_byte(fd)
+    if not nxt:
+        return "\x1b"
+    seq = "\x1b" + nxt
     if seq == "\x1b[":
         while True:
-            r, _, _ = select.select([sys.stdin], [], [], 0.02)
+            r, _, _ = select.select([fd], [], [], 0.08)
             if not r:
                 break
-            c = sys.stdin.read(1)
+            c = _read_fd_byte(fd)
+            if not c:
+                break
             seq += c
             if c.isalpha() or c == "~":
                 break
+    elif seq == "\x1bO":
+        r, _, _ = select.select([fd], [], [], 0.08)
+        if r:
+            c = _read_fd_byte(fd)
+            if c:
+                seq += c
     return seq
 
 
@@ -777,6 +801,140 @@ def _handle_key(state: _WatchState, key: str) -> str | None:
     return "redraw"
 
 
+PICKABLE_EXTS = {".md", ".markdown", ".mdown", ".mkd", ".ipynb"}
+
+
+def _list_dir_entries(directory: Path) -> list[tuple[str, Path]]:
+    entries: list[tuple[str, Path]] = []
+    if directory.parent != directory:
+        entries.append(("../", directory.parent))
+    try:
+        items = sorted(directory.iterdir(),
+                       key=lambda p: (not p.is_dir(), p.name.lower()))
+    except (PermissionError, OSError):
+        return entries
+    for item in items:
+        if item.name.startswith("."):
+            continue
+        try:
+            is_dir = item.is_dir()
+        except OSError:
+            continue
+        if is_dir:
+            entries.append((item.name + "/", item))
+        elif item.suffix.lower() in PICKABLE_EXTS:
+            entries.append((item.name, item))
+    return entries
+
+
+class PickerError(RuntimeError):
+    pass
+
+
+def pick_file(start_dir: str | os.PathLike[str] = ".") -> str | None:
+    if (sys.stdin is None or sys.stdout is None
+            or not sys.stdin.isatty() or not sys.stdout.isatty()):
+        raise PickerError("no file given and stdin is not a terminal")
+
+    directory = Path(start_dir).resolve()
+    if not directory.is_dir():
+        raise PickerError(f"not a directory: {directory}")
+
+    cursor = 0
+    scroll = 0
+    entries = _list_dir_entries(directory)
+    debug = os.environ.get("INNOMD_DEBUG") == "1"
+    last_key_debug = ""
+
+    old_termios = termios.tcgetattr(sys.stdin)
+    sys.stdout.write("\x1b[?1049h\x1b[?25l\x1b[?1l")
+    sys.stdout.flush()
+    tty.setcbreak(sys.stdin.fileno())
+
+    selected: Path | None = None
+    try:
+        while True:
+            cols, rows = _term_size()
+            body_rows = max(1, rows - 2)
+            if cursor < scroll:
+                scroll = cursor
+            if cursor >= scroll + body_rows:
+                scroll = cursor - body_rows + 1
+
+            visible = entries[scroll:scroll + body_rows]
+            header = f" innomd · {directory} "
+            footer = " ↑/k ↓/j  Enter open  h/←  up  q quit "
+            if debug and last_key_debug:
+                footer = f" key={last_key_debug} · {footer.strip()} "
+            out = ["\x1b[H"]
+            out.append(f"\x1b[7m{header[:cols]}\x1b[K\x1b[0m\n")
+            if not entries:
+                out.append("  (no .md / .ipynb files here)\x1b[K\n")
+                for _ in range(body_rows - 1):
+                    out.append("\x1b[K\n")
+            else:
+                for i, (label, _) in enumerate(visible, start=scroll):
+                    is_dir = label.endswith("/")
+                    if i == cursor:
+                        content = f" ❯ {label}"[:cols]
+                        pad = " " * max(0, cols - len(content))
+                        out.append(f"\x1b[1;97;44m{content}{pad}\x1b[0m\x1b[K\n")
+                    elif is_dir:
+                        content = f"   {label}"[:cols]
+                        out.append(f"\x1b[36m{content}\x1b[0m\x1b[K\n")
+                    else:
+                        content = f"   {label}"[:cols]
+                        out.append(f"{content}\x1b[K\n")
+                for _ in range(body_rows - len(visible)):
+                    out.append("\x1b[K\n")
+            out.append(f"\x1b[7m{footer[:cols]}\x1b[K\x1b[0m")
+            sys.stdout.write("".join(out))
+            sys.stdout.flush()
+
+            key = _read_key(None)
+            if key is None:
+                continue
+            if debug:
+                last_key_debug = repr(key)
+            if key in ("q", "\x03"):
+                break
+            if key in ("h", "\x1b[D", "\x1bOD"):
+                if directory.parent != directory:
+                    directory = directory.parent
+                    entries = _list_dir_entries(directory)
+                    cursor = 0
+                    scroll = 0
+                continue
+            if not entries:
+                continue
+            if key in ("j", "\x1b[B", "\x1bOB"):
+                cursor = min(cursor + 1, len(entries) - 1)
+            elif key in ("k", "\x1b[A", "\x1bOA"):
+                cursor = max(cursor - 1, 0)
+            elif key in ("g", "\x1b[H", "\x1bOH"):
+                cursor = 0
+            elif key in ("G", "\x1b[F", "\x1bOF"):
+                cursor = len(entries) - 1
+            elif key in ("\r", "\n", "l", "\x1b[C", "\x1bOC"):
+                _, target = entries[cursor]
+                if target.is_dir():
+                    directory = target.resolve()
+                    entries = _list_dir_entries(directory)
+                    cursor = 0
+                    scroll = 0
+                else:
+                    selected = target
+                    break
+    except KeyboardInterrupt:
+        selected = None
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_termios)
+        sys.stdout.write("\x1b[?25h\x1b[?1049l")
+        sys.stdout.flush()
+
+    return str(selected) if selected else None
+
+
 def watch_loop(file: str, width: int | None, theme_name: str,
                code_override: str | None) -> int:
     state = _WatchState(file, width, theme_name, code_override)
@@ -848,7 +1006,8 @@ def main() -> int:
         prog="innomd",
         description="Terminal Markdown viewer with LaTeX math, Jupyter notebooks, themes, and live reload.",
     )
-    p.add_argument("file", nargs="?", help="markdown or ipynb file (reads stdin if omitted)")
+    p.add_argument("file", nargs="?",
+                   help="markdown/ipynb file or directory; omitted = pick in CWD (or read stdin if piped)")
     p.add_argument("-P", "--no-pager", action="store_true", help="do not page output")
     p.add_argument("-r", "--raw", action="store_true", help="print preprocessed markdown without rendering")
     p.add_argument("-w", "--width", type=int, default=None, help="terminal width in columns")
@@ -871,6 +1030,22 @@ def main() -> int:
     if args.theme not in THEMES:
         print(f"innomd: unknown theme '{args.theme}'. Available: {', '.join(THEMES)}",
               file=sys.stderr)
+        return 1
+
+    try:
+        if args.file is None:
+            if sys.stdin is not None and sys.stdin.isatty():
+                picked = pick_file(".")
+                if picked is None:
+                    return 0
+                args.file = picked
+        elif Path(args.file).is_dir():
+            picked = pick_file(args.file)
+            if picked is None:
+                return 0
+            args.file = picked
+    except PickerError as e:
+        print(f"innomd: {e}", file=sys.stderr)
         return 1
 
     if args.watch:
