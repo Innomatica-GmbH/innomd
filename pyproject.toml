@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "innomd"
-version = "0.2.0"
+version = "0.3.0"
 description = "Terminal Markdown viewer with LaTeX math, Jupyter notebooks, live reload, and themes."
 readme = "README.md"
 license = { file = "LICENSE" }
