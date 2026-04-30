@@ -1,7 +1,7 @@
 """innomd — terminal Markdown viewer with LaTeX math support."""
 from __future__ import annotations
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = ["main", "__version__"]
 
 import argparse
@@ -298,21 +298,24 @@ def convert_math(tex: str) -> str:
     return s
 
 
+_DIAGRAM_FENCE_LANGS = frozenset({"mermaid", "plantuml", "puml", "uml"})
+
+
 def _try_render_diagram(fenced_block: str, width: int,
                         ascii_only: bool) -> str | None:
     """If the fenced block is a supported diagram, return a replacement block.
 
-    Returns a fenced block whose body is the rendered ASCII/Unicode diagram
-    (no language tag, so Rich preserves the whitespace verbatim). Returns
-    None if this isn't a diagram or rendering failed — the caller falls
-    back to the original block.
+    Recognized fence languages: ``` ```mermaid ```, ``` ```plantuml ```,
+    ``` ```puml ```, ``` ```uml ```. The diagram dispatcher figures out
+    which adapter to use from the source content. Returns None if this
+    isn't a diagram fence or rendering failed.
     """
     lines = fenced_block.split("\n")
     if len(lines) < 2 or not lines[0].startswith("```"):
         return None
     info = lines[0][3:].strip().lower()
     lang = info.split()[0] if info else ""
-    if lang != "mermaid":
+    if lang not in _DIAGRAM_FENCE_LANGS:
         return None
     body = "\n".join(lines[1:-1])
     from .diagrams import render_mermaid

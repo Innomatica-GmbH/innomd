@@ -445,5 +445,200 @@ class TestDispatch(unittest.TestCase):
         self.assertIsNone(out)
 
 
+class TestPlantUMLSequence(unittest.TestCase):
+    """PlantUML sequence adapter."""
+
+    def setUp(self):
+        from innomd.diagrams.adapters.plantuml_sequence import parse
+        from innomd.diagrams.ir_sequence import MessageStyle
+        self.parse = parse
+        self.MessageStyle = MessageStyle
+
+    def test_basic_sync(self):
+        ir = self.parse("@startuml\nAlice -> Bob: hi\n@enduml")
+        self.assertEqual({p.id for p in ir.participants}, {"Alice", "Bob"})
+        self.assertEqual(ir.messages[0].style, self.MessageStyle.SYNC)
+
+    def test_async_dashed(self):
+        ir = self.parse("@startuml\nAlice --> Bob: returns\n@enduml")
+        self.assertEqual(ir.messages[0].style, self.MessageStyle.ASYNC)
+
+    def test_apostrophe_in_text_not_treated_as_comment(self):
+        # Inline apostrophe (e.g. `Bob's`) must not eat the rest of the line.
+        ir = self.parse("@startuml\nAlice -> Bob: ask Bob's name\n@enduml")
+        self.assertEqual(ir.messages[0].text, "ask Bob's name")
+
+    def test_loop_block(self):
+        ir = self.parse(
+            "@startuml\n"
+            "Alice -> Bob: m1\n"
+            "loop forever\n"
+            "  Alice -> Bob: m2\n"
+            "end\n"
+            "@enduml"
+        )
+        self.assertEqual(len(ir.blocks), 1)
+        self.assertEqual(ir.blocks[0].kind, "loop")
+        self.assertEqual(ir.blocks[0].label, "forever")
+
+    def test_explicit_participant_label(self):
+        ir = self.parse(
+            '@startuml\n'
+            'participant Alice as "Alice Smith"\n'
+            'Alice -> Bob: hi\n'
+            '@enduml'
+        )
+        labels = {p.id: p.label for p in ir.participants}
+        self.assertEqual(labels["Alice"], "Alice Smith")
+
+
+class TestPlantUMLClass(unittest.TestCase):
+    """PlantUML class adapter."""
+
+    def setUp(self):
+        from innomd.diagrams.adapters.plantuml_class import parse
+        from innomd.diagrams.ir_class import ClassEdgeKind
+        self.parse = parse
+        self.ClassEdgeKind = ClassEdgeKind
+
+    def test_inheritance_parent_at_top(self):
+        ir = self.parse("@startuml\nAnimal <|-- Dog\n@enduml")
+        e = ir.edges[0]
+        # Parent is src (top of layout); Animal is parent.
+        self.assertEqual(e.src, "Animal")
+        self.assertEqual(e.dst, "Dog")
+        self.assertEqual(e.kind, self.ClassEdgeKind.INHERITANCE)
+
+    def test_class_block_with_members(self):
+        ir = self.parse(
+            "@startuml\n"
+            "class Animal {\n"
+            "  +String name\n"
+            "  +int age\n"
+            "  +makeSound()\n"
+            "}\n"
+            "@enduml"
+        )
+        animal = next(n for n in ir.nodes if n.id == "Animal")
+        self.assertEqual(len(animal.members), 3)
+        self.assertEqual(animal.members[0].text, "+String name")
+
+    def test_single_line_member(self):
+        ir = self.parse(
+            "@startuml\n"
+            "Animal : +int age\n"
+            "@enduml"
+        )
+        animal = next(n for n in ir.nodes if n.id == "Animal")
+        self.assertEqual(animal.members[0].text, "+int age")
+
+    def test_composition(self):
+        ir = self.parse("@startuml\nCar *-- Engine\n@enduml")
+        e = ir.edges[0]
+        self.assertEqual(e.kind, self.ClassEdgeKind.COMPOSITION)
+        self.assertEqual(e.src, "Car")    # whole
+        self.assertEqual(e.dst, "Engine") # part
+
+
+class TestPlantUMLGantt(unittest.TestCase):
+    """PlantUML gantt adapter."""
+
+    def setUp(self):
+        from innomd.diagrams.adapters.plantuml_gantt import parse
+        from innomd.diagrams.ir_gantt import TaskState
+        self.parse = parse
+        self.TaskState = TaskState
+
+    def test_basic_task(self):
+        ir = self.parse(
+            "@startgantt\n"
+            "project starts 2024-01-01\n"
+            "[Setup] lasts 5 days\n"
+            "@endgantt"
+        )
+        self.assertEqual(len(ir.tasks), 1)
+        t = ir.tasks[0]
+        self.assertEqual(t.name, "Setup")
+        self.assertEqual((t.end - t.start).days, 5)
+
+    def test_after_dependency(self):
+        ir = self.parse(
+            "@startgantt\n"
+            "project starts 2024-01-01\n"
+            "[A] lasts 5 days\n"
+            "[B] lasts 3 days\n"
+            "[B] starts at [A]'s end\n"
+            "@endgantt"
+        )
+        a, b = ir.tasks
+        self.assertEqual(b.start, a.end)
+
+    def test_done_state(self):
+        ir = self.parse(
+            "@startgantt\n"
+            "project starts 2024-01-01\n"
+            "[X] lasts 1 day\n"
+            "[X] is done\n"
+            "@endgantt"
+        )
+        self.assertEqual(ir.tasks[0].state, self.TaskState.DONE)
+
+    def test_percent_completed(self):
+        ir = self.parse(
+            "@startgantt\n"
+            "project starts 2024-01-01\n"
+            "[X] lasts 1 day\n"
+            "[X] is 50% completed\n"
+            "@endgantt"
+        )
+        self.assertEqual(ir.tasks[0].state, self.TaskState.ACTIVE)
+
+    def test_section(self):
+        ir = self.parse(
+            "@startgantt\n"
+            "project starts 2024-01-01\n"
+            "-- Phase 1 --\n"
+            "[X] lasts 1 day\n"
+            "@endgantt"
+        )
+        self.assertEqual(ir.tasks[0].section, "Phase 1")
+
+
+class TestPlantUMLDispatch(unittest.TestCase):
+    """End-to-end dispatch: ```plantuml fences route to the right adapter."""
+
+    def setUp(self):
+        from innomd.diagrams import render_mermaid
+        self.render = render_mermaid
+
+    def test_dispatch_sequence(self):
+        out = self.render(
+            "@startuml\nAlice -> Bob: hi\n@enduml", width=80
+        )
+        self.assertIsNotNone(out)
+        self.assertIn("Alice", "\n".join(out))
+        self.assertIn("▶", "\n".join(out))
+
+    def test_dispatch_class(self):
+        out = self.render(
+            "@startuml\nAnimal <|-- Dog\n@enduml", width=80
+        )
+        self.assertIsNotNone(out)
+        joined = "\n".join(out)
+        self.assertIn("Animal", joined)
+        self.assertTrue(any(t in joined for t in "△▽◁▷"))
+
+    def test_dispatch_gantt(self):
+        out = self.render(
+            "@startgantt\n"
+            "project starts 2024-01-01\n"
+            "[T] lasts 1 day\n"
+            "@endgantt",
+            width=80,
+        )
+        self.assertIsNotNone(out)
+        self.assertIn("░", "\n".join(out))
+
+
 if __name__ == "__main__":
     unittest.main()

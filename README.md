@@ -77,8 +77,11 @@ renders as
   that re-renders on every save and lets you scroll, search, and jump
   between matches — ideal for writing notes in one pane and previewing
   in another.
-- **Mermaid diagrams** — ` ```mermaid ` blocks render as Unicode/ASCII
-  diagrams directly in the terminal:
+- **Mermaid and PlantUML diagrams** — ` ```mermaid `, ` ```plantuml `,
+  ` ```puml `, and ` ```uml ` blocks all render as Unicode/ASCII diagrams
+  directly in the terminal. Auto-detection picks the right adapter based
+  on the source content (`@startuml` / `flowchart` / `sequenceDiagram`
+  / etc.):
   - **Flowcharts** with 14 node shapes (rect, round, stadium, diamond,
     hexagon, circle, parallelograms, trapezoids, double circle, …)
   - **Sequence diagrams** with lifelines, sync/async arrows, self-loops
@@ -86,7 +89,7 @@ renders as
   - **Class diagrams** with class boxes (name + member compartments) and
     UML edges (inheritance △, composition ◆, aggregation ◇, association ▶)
   - **Gantt charts** with date axis, task bars by state (done/active/
-    future), and `after X` dependency resolution
+    future), and dependency resolution (`after X` / `[X] starts at [Y]'s end`)
 - **Theme presets** — 9 built-in color themes: `default`, `nord`, `dracula`,
   `gruvbox`, `solarized-dark`, `solarized-light`, `tokyonight`, `github`,
   `mono`. List with `innomd --list-themes`.
@@ -210,11 +213,17 @@ Mouse scrolling uses SGR reporting (xterm 1006). Inside tmux, add
 active, hold `Shift` to select text with the mouse — standard
 xterm behaviour shared with `less`, `htop`, `vim`.
 
-### Mermaid diagrams
+### Mermaid and PlantUML diagrams
 
-Fenced ` ```mermaid ` blocks are rendered inline as terminal-friendly
-diagrams. innomd auto-detects the diagram type from the first content
-line and dispatches to the appropriate renderer.
+Fenced ` ```mermaid ` and ` ```plantuml ` (also `puml`, `uml`) blocks
+are rendered inline as terminal-friendly diagrams. innomd auto-detects
+both the source format and the diagram type from the block content,
+then dispatches to the appropriate adapter and renderer.
+
+PlantUML and mermaid share the same internal representation (IRs) and
+the same renderers — only the parsing differs. So a sequence diagram
+written in PlantUML produces identical visual output to one written in
+mermaid.
 
 #### Flowcharts (`graph` / `flowchart`)
 
@@ -270,6 +279,30 @@ durations (`Nd`/`Nw`), plus `after <id>` dependencies that resolve to
 absolute start dates automatically. Sections are rendered as labeled
 groups.
 
+#### PlantUML notes
+
+PlantUML support covers the same four diagram families as mermaid —
+sequence, class, gantt — using PlantUML's `@startuml … @enduml` (or
+`@startgantt … @endgantt`) wrapper syntax:
+
+- **Sequence**: `participant X`, `actor X`, `X -> Y : text` (sync),
+  `X --> Y : text` (async/dashed), self-messages, `loop`/`alt`/`opt`
+  block markers.
+- **Class**: same edge connectors as mermaid (`<|--`, `*--`, `o--`,
+  `..>`), plus block-style member declaration:
+  ```
+  class Animal {
+    +String name
+    +makeSound()
+  }
+  ```
+- **Gantt**: `[Task] lasts N days`, `[Task] starts <date>`,
+  `[Task] starts at [Other]'s end`, `[Task] is done`,
+  `[Task] is X% completed`, `-- Section --` dividers.
+
+PlantUML *activity* diagrams (`start`/`stop`/`if`/`while` syntax) are
+not yet supported; they fall back to the source code block for now.
+
 #### Implementation notes
 
 Layout for flowcharts and class diagrams uses
@@ -280,8 +313,9 @@ not graphs (lifelines + time order; bars on a calendar axis).
 
 Anything outside the supported subset (gitGraph, mindmap, journey, ER,
 state machines, styling directives, subgraphs, modern `@{shape:…}`
-syntax) gracefully falls back to showing the original block as code, so
-unsupported diagrams never crash your render.
+syntax, PlantUML activity diagrams) gracefully falls back to showing
+the original block as code, so unsupported diagrams never crash your
+render.
 
 Use `--diagrams-ascii` if your terminal lacks Unicode box-drawing
 support, or `--no-diagrams` to skip rendering entirely and show the
@@ -293,7 +327,7 @@ How `innomd` stacks up against other terminal Markdown viewers:
 
 | Tool       | LaTeX math | Jupyter `.ipynb` | Live reload | Mermaid | Tables | Code highlighting | Images | Language |
 |------------|:----------:|:----------------:|:-----------:|:-------:|:------:|:-----------------:|:------:|:--------:|
-| **innomd** | ✅ (Unicode) | ✅ | ✅ | ✅ (flowchart, sequence, class, gantt) | ✅ | ✅ | — | Python |
+| **innomd** | ✅ (Unicode) | ✅ | ✅ | ✅ + PlantUML (flowchart, sequence, class, gantt) | ✅ | ✅ | — | Python |
 | glow       | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | — | Go |
 | mdcat      | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ (Kitty/iTerm2) | Rust |
 | bat        | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ (syntax only) | — | Rust |

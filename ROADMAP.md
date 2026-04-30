@@ -5,21 +5,35 @@ are notes on directions we have considered and decided to revisit later.
 
 ## Under consideration
 
-### PlantUML adapters
+### PlantUML activity diagrams
 
-The diagram engine's IRs (`GraphIR`, `SequenceIR`, `ClassIR`, `GanttIR`)
-are deliberately format-agnostic — populated by mermaid adapters today,
-and ready to accept PlantUML adapters tomorrow. Add:
+PlantUML's "activity" diagrams use a control-flow style that is closer
+to a small programming language than to a graph definition:
 
-- `adapters/plantuml.py` — PlantUML activity/flowchart syntax → `GraphIR`
-- `adapters/plantuml_sequence.py` — `@startuml … @enduml` sequence → `SequenceIR`
-- `adapters/plantuml_class.py` — PlantUML class syntax → `ClassIR`
-- `adapters/plantuml_gantt.py` — PlantUML gantt → `GanttIR`
+```
+@startuml
+start
+:Read configuration;
+if (Valid?) then (yes)
+  :Initialize;
+else (no)
+  :Show error;
+  stop
+endif
+:Run main loop;
+stop
+@enduml
+```
 
-Detection key: ` ```plantuml ` fence language plus the `@start<kind>` /
-`@end<kind>` markers inside, which identify the diagram type. The
-existing renderers stay untouched — only parsing differs between
-PlantUML and mermaid sources.
+Sequence/class/gantt PlantUML adapters already exist; activity is
+deferred because its parser needs structured-block tracking
+(`if`/`then`/`else`/`endif`, `while`/`endwhile`, `repeat`/`repeatwhile`,
+parallel splits). The output target would be `GraphIR` (the same
+flowchart renderer can draw it once parsed).
+
+A minimal first pass would handle: `start`/`stop`, sequential
+`:label;` actions, basic `if (…) then (yes) … else (no) … endif`
+branches. `while`/`repeat`/`fork`/`partition` come later.
 
 ### Sequence diagrams: notes and activations
 
@@ -113,3 +127,12 @@ usage patterns make it worthwhile.
   diagram type (flowchart / sequence / class / gantt) so future
   PlantUML adapters can plug into the same renderers without changing
   the public entry point.
+- **Diagram engine — PlantUML adapters (sequence, class, gantt).**
+  Recognizes ` ```plantuml `, ` ```puml `, and ` ```uml ` fence
+  languages. Auto-detects `@startuml` / `@startgantt` and sniffs the
+  body to pick sequence vs class. Adapters parse PlantUML's syntax
+  (`participant`, `actor`, `class … { … }`, `[Task] lasts N days`,
+  `starts at [Other]'s end`, etc.) into the same format-agnostic IRs
+  used by mermaid, so the renderers are reused unchanged. Activity
+  diagrams (`start`/`stop`/`:label;`) remain on the code-block fallback
+  and are tracked separately in roadmap.
