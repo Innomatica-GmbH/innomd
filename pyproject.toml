@@ -40,6 +40,7 @@ classifiers = [
 ]
 dependencies = [
     "rich>=13.0",
+    "grandalf>=0.8",
 ]
 
 [project.urls]

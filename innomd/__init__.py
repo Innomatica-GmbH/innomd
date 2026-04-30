@@ -298,12 +298,46 @@ def convert_math(tex: str) -> str:
     return s
 
 
-def preprocess(text: str) -> str:
+def _try_render_diagram(fenced_block: str, width: int,
+                        ascii_only: bool) -> str | None:
+    """If the fenced block is a supported diagram, return a replacement block.
+
+    Returns a fenced block whose body is the rendered ASCII/Unicode diagram
+    (no language tag, so Rich preserves the whitespace verbatim). Returns
+    None if this isn't a diagram or rendering failed — the caller falls
+    back to the original block.
+    """
+    lines = fenced_block.split("\n")
+    if len(lines) < 2 or not lines[0].startswith("```"):
+        return None
+    info = lines[0][3:].strip().lower()
+    lang = info.split()[0] if info else ""
+    if lang != "mermaid":
+        return None
+    body = "\n".join(lines[1:-1])
+    from .diagrams import render_mermaid
+    # Reserve a few cells for Rich's code-block panel padding.
+    eff_width = max(20, width - 4)
+    diagram = render_mermaid(body, eff_width, ascii_only=ascii_only)
+    if diagram is None:
+        return None
+    rendered = "\n".join(diagram).rstrip("\n")
+    return "```\n" + rendered + "\n```"
+
+
+def preprocess(text: str, *, diagram_width: int = 80,
+               diagrams_enabled: bool = True,
+               diagrams_ascii: bool = False) -> str:
     fence_re = re.compile(r"(^```.*?^```)", re.DOTALL | re.MULTILINE)
     parts = fence_re.split(text)
     out = []
     for part in parts:
         if part.startswith("```"):
+            if diagrams_enabled:
+                replaced = _try_render_diagram(part, diagram_width, diagrams_ascii)
+                if replaced is not None:
+                    out.append(replaced)
+                    continue
             out.append(part)
             continue
         part = re.sub(r"\$\$(.+?)\$\$",
@@ -445,11 +479,15 @@ def _ansi_strip(s: str) -> str:
 
 class _WatchState:
     def __init__(self, file: str, user_width: int | None,
-                 theme_name: str, code_override: str | None) -> None:
+                 theme_name: str, code_override: str | None,
+                 *, diagrams_enabled: bool = True,
+                 diagrams_ascii: bool = False) -> None:
         self.file = Path(file)
         self.user_width = user_width
         self.theme_name = theme_name
         self.code_override = code_override
+        self.diagrams_enabled = diagrams_enabled
+        self.diagrams_ascii = diagrams_ascii
         self.lines: list[str] = []
         self.offset = 0
         self.cols, self.rows = _term_size()
@@ -473,13 +511,15 @@ def _render_lines(state: _WatchState) -> list[str]:
         return [f"\x1b[31minnomd: waiting for {state.file}…\x1b[0m"]
     except Exception as e:
         return [f"\x1b[31minnomd: {e}\x1b[0m"]
+    width = state.user_width or max(20, state.cols)
     try:
-        processed = preprocess(text)
+        processed = preprocess(text, diagram_width=width,
+                               diagrams_enabled=state.diagrams_enabled,
+                               diagrams_ascii=state.diagrams_ascii)
         Console, InnoMarkdown, rich_theme, code_theme = build_renderer(
             state.theme_name, state.code_override)
     except Exception as e:
         return [f"\x1b[31minnomd: {e}\x1b[0m"]
-    width = state.user_width or max(20, state.cols)
     buf = io.StringIO()
     console = Console(file=buf, width=width, theme=rich_theme,
                       force_terminal=True, color_system="truecolor",
@@ -936,8 +976,12 @@ def pick_file(start_dir: str | os.PathLike[str] = ".") -> str | None:
 
 
 def watch_loop(file: str, width: int | None, theme_name: str,
-               code_override: str | None) -> int:
-    state = _WatchState(file, width, theme_name, code_override)
+               code_override: str | None, *,
+               diagrams_enabled: bool = True,
+               diagrams_ascii: bool = False) -> int:
+    state = _WatchState(file, width, theme_name, code_override,
+                        diagrams_enabled=diagrams_enabled,
+                        diagrams_ascii=diagrams_ascii)
 
     if not sys.stdin.isatty():
         print("innomd: --watch requires an interactive terminal on stdin",
@@ -1017,6 +1061,10 @@ def main() -> int:
                    help="override pygments code theme (e.g. monokai, dracula, nord)")
     p.add_argument("-W", "--watch", action="store_true",
                    help="live-reload: re-render when the file changes")
+    p.add_argument("--no-diagrams", action="store_true",
+                   help="disable rendering of mermaid diagrams (show raw fence instead)")
+    p.add_argument("--diagrams-ascii", action="store_true",
+                   help="render diagrams with ASCII glyphs instead of Unicode box-drawing")
     p.add_argument("--list-themes", action="store_true", help="list available themes and exit")
     p.add_argument("-V", "--version", action="version",
                    version=f"innomd {__version__}")
@@ -1052,7 +1100,9 @@ def main() -> int:
         if not args.file:
             print("innomd: --watch requires a file argument", file=sys.stderr)
             return 1
-        return watch_loop(args.file, args.width, args.theme, args.code_theme)
+        return watch_loop(args.file, args.width, args.theme, args.code_theme,
+                          diagrams_enabled=not args.no_diagrams,
+                          diagrams_ascii=args.diagrams_ascii)
 
     try:
         text = load_source(args.file)
@@ -1066,7 +1116,10 @@ def main() -> int:
         print(f"innomd: invalid notebook JSON: {e}", file=sys.stderr)
         return 1
 
-    processed = preprocess(text)
+    eff_width = args.width or _term_size()[0]
+    processed = preprocess(text, diagram_width=eff_width,
+                           diagrams_enabled=not args.no_diagrams,
+                           diagrams_ascii=args.diagrams_ascii)
 
     if args.raw:
         sys.stdout.write(processed)

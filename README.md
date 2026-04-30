@@ -77,6 +77,16 @@ renders as
   that re-renders on every save and lets you scroll, search, and jump
   between matches — ideal for writing notes in one pane and previewing
   in another.
+- **Mermaid diagrams** — ` ```mermaid ` blocks render as Unicode/ASCII
+  diagrams directly in the terminal:
+  - **Flowcharts** with 14 node shapes (rect, round, stadium, diamond,
+    hexagon, circle, parallelograms, trapezoids, double circle, …)
+  - **Sequence diagrams** with lifelines, sync/async arrows, self-loops
+    and `loop`/`alt`/`opt` block markers
+  - **Class diagrams** with class boxes (name + member compartments) and
+    UML edges (inheritance △, composition ◆, aggregation ◇, association ▶)
+  - **Gantt charts** with date axis, task bars by state (done/active/
+    future), and `after X` dependency resolution
 - **Theme presets** — 9 built-in color themes: `default`, `nord`, `dracula`,
   `gruvbox`, `solarized-dark`, `solarized-light`, `tokyonight`, `github`,
   `mono`. List with `innomd --list-themes`.
@@ -86,7 +96,9 @@ renders as
 - **Subtle horizontal rules** (`---` renders as centered `· · ·`).
 - **Pager integration** (`less -R`) with automatic TTY detection.
 - **Code-block safe** — math inside fenced code blocks is never substituted.
-- **Pure Python** — one script, one dependency (`rich`), no Node, no Go toolchain.
+- **Pure Python** — `rich` plus `grandalf` (a small layout library); no
+  Node, no Graphviz binary, no Go toolchain. `pipx install innomd` is
+  the only step you need, including for diagram rendering.
 
 ## Installation
 
@@ -168,6 +180,8 @@ innomd -r file.md                 # raw preprocessed markdown
 | `-t`, `--theme`         | Preset theme (see `--list-themes`)            |
 | `-c`, `--code-theme`    | Override Pygments code theme only             |
 | `-W`, `--watch`         | Live-reload: re-render on file change         |
+| `--no-diagrams`         | Disable mermaid diagram rendering             |
+| `--diagrams-ascii`      | Render diagrams with ASCII glyphs only        |
 | `--list-themes`         | List available preset themes                  |
 
 ### Watch mode
@@ -196,17 +210,94 @@ Mouse scrolling uses SGR reporting (xterm 1006). Inside tmux, add
 active, hold `Shift` to select text with the mouse — standard
 xterm behaviour shared with `less`, `htop`, `vim`.
 
+### Mermaid diagrams
+
+Fenced ` ```mermaid ` blocks are rendered inline as terminal-friendly
+diagrams. innomd auto-detects the diagram type from the first content
+line and dispatches to the appropriate renderer.
+
+#### Flowcharts (`graph` / `flowchart`)
+
+```mermaid
+flowchart TD
+  A[Start] --> B{Choice}
+  B -- yes --> C((End))
+  B -->|no| D([alt])
+  D --> C
+```
+
+Supported syntax:
+
+- Headers: `graph TD|LR|BT|RL`, `flowchart TD|LR|BT|RL`, with optional
+  YAML frontmatter (`---\ntitle: …\n---`)
+- Node shapes:
+  - `A[rect]` — sharp box
+  - `B(round)` — rounded corners
+  - `C([stadium])` — pill with parens on sides
+  - `D{decision}` — heavy-line box; for short labels (≤6 chars) a true
+    rhombus with `╱╲` slopes
+  - `E{{hexagon}}` — double-line border
+  - `F((circle))` — indented top/bottom with curved sides
+  - `G[/parallelogram/]`, `H[\parallel-alt\]` — true leaning shapes
+  - `I[/trapezoid\]`, `J[\trap-inv/]` — bottom-/top-wider trapezoids
+  - `K[(cylinder)]`, `L[[subroutine]]`, `M>asymmetric]`, `N(((stop)))`
+  - All accept quoted labels: `A["with spaces & punct"]`
+- Edges: `-->` (arrow), `---` (no arrow), `-.->` (dashed), `==>` (thick)
+- Edge labels: `A -- text --> B` and `A -->|text| B`
+
+#### Sequence diagrams (`sequenceDiagram`)
+
+Lifelines (vertical bars) per participant, horizontal arrows per message
+in time order. Sync (`->>`), async (`-->>`), self-messages (rendered as
+small loops on the lifeline). `loop`/`alt`/`opt`/`par` blocks render as
+gestrichelt label markers. Participant boxes are repeated at the bottom
+so identities stay visible on long diagrams.
+
+#### Class diagrams (`classDiagram`)
+
+Class boxes show the name and member compartments (fields and methods).
+UML edge decorations: `△` inheritance (at parent), `◆` composition,
+`◇` aggregation, `▶` association, dashed line for dependency, double
+arrow for bidirectional. Disconnected components are shelf-packed
+horizontally instead of stacked vertically, so a diagram with many
+small class pairs reads compactly.
+
+#### Gantt charts (`gantt`)
+
+Date axis with year/month-day ticks, task bars styled by state:
+`█` done, `▓` active, `░` future. Tasks support absolute dates and
+durations (`Nd`/`Nw`), plus `after <id>` dependencies that resolve to
+absolute start dates automatically. Sections are rendered as labeled
+groups.
+
+#### Implementation notes
+
+Layout for flowcharts and class diagrams uses
+[grandalf](https://pypi.org/project/grandalf/), a pure-Python Sugiyama
+layered-graph library — no external Graphviz binary required. Sequence
+and gantt diagrams have their own dedicated renderers because they are
+not graphs (lifelines + time order; bars on a calendar axis).
+
+Anything outside the supported subset (gitGraph, mindmap, journey, ER,
+state machines, styling directives, subgraphs, modern `@{shape:…}`
+syntax) gracefully falls back to showing the original block as code, so
+unsupported diagrams never crash your render.
+
+Use `--diagrams-ascii` if your terminal lacks Unicode box-drawing
+support, or `--no-diagrams` to skip rendering entirely and show the
+mermaid source as a normal code block.
+
 ## Comparison
 
 How `innomd` stacks up against other terminal Markdown viewers:
 
-| Tool       | LaTeX math | Jupyter `.ipynb` | Live reload | Tables | Code highlighting | Images | Language |
-|------------|:----------:|:----------------:|:-----------:|:------:|:-----------------:|:------:|:--------:|
-| **innomd** | ✅ (Unicode) | ✅ | ✅ | ✅ | ✅ | — | Python |
-| glow       | ❌ | ❌ | ❌ | ✅ | ✅ | — | Go |
-| mdcat      | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ (Kitty/iTerm2) | Rust |
-| bat        | ❌ | ❌ | ❌ | ❌ | ✅ (syntax only) | — | Rust |
-| frogmouth  | ❌ | ❌ | ❌ | ✅ | ✅ | — | Python |
+| Tool       | LaTeX math | Jupyter `.ipynb` | Live reload | Mermaid | Tables | Code highlighting | Images | Language |
+|------------|:----------:|:----------------:|:-----------:|:-------:|:------:|:-----------------:|:------:|:--------:|
+| **innomd** | ✅ (Unicode) | ✅ | ✅ | ✅ (flowchart, sequence, class, gantt) | ✅ | ✅ | — | Python |
+| glow       | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | — | Go |
+| mdcat      | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ (Kitty/iTerm2) | Rust |
+| bat        | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ (syntax only) | — | Rust |
+| frogmouth  | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | — | Python |
 
 If you don't write formulas, use `glow` or `mdcat` — they're excellent.
 If you do, this tool exists because nothing else did the job in the terminal.
