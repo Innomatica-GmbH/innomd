@@ -640,5 +640,196 @@ class TestPlantUMLDispatch(unittest.TestCase):
         self.assertIn("░", "\n".join(out))
 
 
+class TestSequenceNotesAndActivations(unittest.TestCase):
+    """Notes (left/right/over) and activations on sequence lifelines."""
+
+    def test_inline_note_left(self):
+        from innomd.diagrams.adapters.mermaid_sequence import parse
+        ir = parse(
+            "sequenceDiagram\n"
+            "  Alice->>Bob: hi\n"
+            "  Note left of Alice: a comment"
+        )
+        self.assertEqual(len(ir.notes), 1)
+        self.assertEqual(ir.notes[0].text, "a comment")
+        self.assertEqual(ir.notes[0].side.value, "left")
+        self.assertEqual(ir.notes[0].participants, ("Alice",))
+
+    def test_inline_note_over_two(self):
+        from innomd.diagrams.adapters.mermaid_sequence import parse
+        ir = parse(
+            "sequenceDiagram\n"
+            "  Alice->>Bob: hi\n"
+            "  Note over Alice, Bob: shared"
+        )
+        n = ir.notes[0]
+        self.assertEqual(n.side.value, "over")
+        self.assertEqual(n.participants, ("Alice", "Bob"))
+
+    def test_activation_pair(self):
+        from innomd.diagrams.adapters.plantuml_sequence import parse
+        ir = parse(
+            "@startuml\n"
+            "Alice -> Bob: ask\n"
+            "activate Bob\n"
+            "Bob --> Alice: answer\n"
+            "deactivate Bob\n"
+            "@enduml"
+        )
+        self.assertEqual(len(ir.activations), 1)
+        a = ir.activations[0]
+        self.assertEqual(a.participant, "Bob")
+
+    def test_renders_with_notes_and_activations(self):
+        from innomd.diagrams import render_mermaid
+        out = render_mermaid(
+            "@startuml\n"
+            "Alice -> Bob: q\n"
+            "activate Bob\n"
+            "Bob --> Alice: a\n"
+            "deactivate Bob\n"
+            "Note right of Alice: done\n"
+            "@enduml",
+            width=80,
+        )
+        self.assertIsNotNone(out)
+        joined = "\n".join(out)
+        self.assertIn("done", joined)
+
+
+class TestPlantUMLC4Adapter(unittest.TestCase):
+    """C4-PlantUML macro vocabulary."""
+
+    def test_simple_c4(self):
+        from innomd.diagrams.adapters.plantuml_c4 import parse
+        ir = parse(
+            '@startuml\n'
+            'Person(user, "User")\n'
+            'System(app, "Web App")\n'
+            'Rel(user, app, "Uses")\n'
+            '@enduml'
+        )
+        names = [n.id for n in ir.nodes]
+        self.assertIn("user", names)
+        self.assertIn("app", names)
+        self.assertEqual(len(ir.edges), 1)
+        self.assertEqual(ir.edges[0].label, "Uses")
+
+    def test_named_params_ignored(self):
+        from innomd.diagrams.adapters.plantuml_c4 import parse
+        ir = parse(
+            '@startuml\n'
+            'Person(user, "Bob", $tags="customer")\n'
+            'System(app, "Web App", $sprite="application_server")\n'
+            'Rel(user, app, "Uses", $tags="primary")\n'
+            '@enduml'
+        )
+        # Despite named params, positional still resolves.
+        user = next(n for n in ir.nodes if n.id == "user")
+        self.assertEqual(user.label, "Bob")
+
+    def test_container_db_is_circle(self):
+        from innomd.diagrams.adapters.plantuml_c4 import parse
+        from innomd.diagrams.ir import NodeShape
+        ir = parse(
+            '@startuml\n'
+            'ContainerDb(db, "Database", "PostgreSQL")\n'
+            '@enduml'
+        )
+        self.assertEqual(ir.nodes[0].shape, NodeShape.CIRCLE)
+
+    def test_component_primitives(self):
+        from innomd.diagrams.adapters.plantuml_c4 import parse
+        ir = parse(
+            '@startuml\n'
+            'rectangle Frontend\n'
+            'database DB\n'
+            'interface API\n'
+            'Frontend -down-> API\n'
+            'API -right-> DB\n'
+            '@enduml'
+        )
+        ids = [n.id for n in ir.nodes]
+        self.assertEqual(set(ids), {"Frontend", "DB", "API"})
+        self.assertEqual(len(ir.edges), 2)
+
+
+class TestPlantUMLActivity(unittest.TestCase):
+    """PlantUML activity diagrams."""
+
+    def test_simple_linear(self):
+        from innomd.diagrams.adapters.plantuml_activity import parse
+        ir = parse(
+            "@startuml\n"
+            "start\n"
+            ":Step one;\n"
+            ":Step two;\n"
+            "stop\n"
+            "@enduml"
+        )
+        labels = [n.label for n in ir.nodes]
+        self.assertIn("Step one", labels)
+        self.assertIn("Step two", labels)
+        self.assertEqual(len(ir.edges), 3)   # start→1→2→stop
+
+    def test_if_then_else(self):
+        from innomd.diagrams.adapters.plantuml_activity import parse
+        from innomd.diagrams.ir import NodeShape
+        ir = parse(
+            "@startuml\n"
+            "start\n"
+            ":Read;\n"
+            "if (ok?) then (yes)\n"
+            "  :Process;\n"
+            "else (no)\n"
+            "  :Error;\n"
+            "endif\n"
+            ":Done;\n"
+            "stop\n"
+            "@enduml"
+        )
+        # Diamond present.
+        diamonds = [n for n in ir.nodes if n.shape == NodeShape.DIAMOND]
+        self.assertEqual(len(diamonds), 1)
+        self.assertEqual(diamonds[0].label, "ok?")
+        # Two branch labels on outgoing edges from the diamond.
+        edge_labels = [e.label for e in ir.edges
+                       if e.src == diamonds[0].id and e.label]
+        self.assertIn("yes", edge_labels)
+        self.assertIn("no", edge_labels)
+
+
+class TestPlantUMLDispatchExtended(unittest.TestCase):
+    """Confirm the dispatcher routes to the new pipelines."""
+
+    def setUp(self):
+        from innomd.diagrams import render_mermaid
+        self.render = render_mermaid
+
+    def test_dispatch_c4(self):
+        out = self.render(
+            '@startuml\n'
+            'Person(u, "User")\n'
+            'System(s, "Web")\n'
+            'Rel(u, s, "Uses")\n'
+            '@enduml',
+            width=80,
+        )
+        self.assertIsNotNone(out)
+        self.assertIn("User", "\n".join(out))
+
+    def test_dispatch_activity(self):
+        out = self.render(
+            "@startuml\n"
+            "start\n"
+            ":Read;\n"
+            "stop\n"
+            "@enduml",
+            width=80,
+        )
+        self.assertIsNotNone(out)
+        self.assertIn("Read", "\n".join(out))
+
+
 if __name__ == "__main__":
     unittest.main()

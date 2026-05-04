@@ -84,12 +84,19 @@ renders as
   / etc.):
   - **Flowcharts** with 14 node shapes (rect, round, stadium, diamond,
     hexagon, circle, parallelograms, trapezoids, double circle, …)
-  - **Sequence diagrams** with lifelines, sync/async arrows, self-loops
-    and `loop`/`alt`/`opt` block markers
+  - **Sequence diagrams** with lifelines, sync/async arrows, self-loops,
+    `loop`/`alt`/`opt` block markers, `Note left/right/over of X`
+    annotations, and `activate`/`deactivate` lifeline activations
   - **Class diagrams** with class boxes (name + member compartments) and
     UML edges (inheritance △, composition ◆, aggregation ◇, association ▶)
   - **Gantt charts** with date axis, task bars by state (done/active/
     future), and dependency resolution (`after X` / `[X] starts at [Y]'s end`)
+  - **PlantUML C4** architecture diagrams: `Person()`/`System()`/
+    `Container()`/`ContainerDb()`/`Rel()`/`Boundary { … }` macros render
+    into a flowchart-style graph
+  - **PlantUML Activity** diagrams: `start`/`stop`/`:label;` actions,
+    `if (cond) then (yes)…else (no)…endif` decisions, `while`/`repeat`
+    loops
 - **Theme presets** — 9 built-in color themes: `default`, `nord`, `dracula`,
   `gruvbox`, `solarized-dark`, `solarized-light`, `tokyonight`, `github`,
   `mono`. List with `innomd --list-themes`.
@@ -185,6 +192,7 @@ innomd -r file.md                 # raw preprocessed markdown
 | `-W`, `--watch`         | Live-reload: re-render on file change         |
 | `--no-diagrams`         | Disable mermaid diagram rendering             |
 | `--diagrams-ascii`      | Render diagrams with ASCII glyphs only        |
+| `--diagrams-wide`       | Render wide diagrams at natural width (use with pager + `less -S`) |
 | `--list-themes`         | List available preset themes                  |
 
 ### Watch mode
@@ -281,13 +289,15 @@ groups.
 
 #### PlantUML notes
 
-PlantUML support covers the same four diagram families as mermaid —
+PlantUML support covers the same diagram families as mermaid —
 sequence, class, gantt — using PlantUML's `@startuml … @enduml` (or
 `@startgantt … @endgantt`) wrapper syntax:
 
 - **Sequence**: `participant X`, `actor X`, `X -> Y : text` (sync),
   `X --> Y : text` (async/dashed), self-messages, `loop`/`alt`/`opt`
-  block markers.
+  block markers, direction modifiers in arrows (`-down->`, `-[#red]->`),
+  trailing stereotypes (`<<Person>>`), `Note left/right/over of X: …`
+  annotations, and `activate X` / `deactivate X` lifeline activations.
 - **Class**: same edge connectors as mermaid (`<|--`, `*--`, `o--`,
   `..>`), plus block-style member declaration:
   ```
@@ -299,39 +309,75 @@ sequence, class, gantt — using PlantUML's `@startuml … @enduml` (or
 - **Gantt**: `[Task] lasts N days`, `[Task] starts <date>`,
   `[Task] starts at [Other]'s end`, `[Task] is done`,
   `[Task] is X% completed`, `-- Section --` dividers.
+- **C4 architecture**: the [C4-PlantUML](https://github.com/plantuml-stdlib/C4-PlantUML)
+  macro vocabulary — `Person()`, `System()`, `Container()`, `ContainerDb()`,
+  `Component()`, `Rel()`, `BiRel()`, `System_Boundary { … }` — is
+  rendered into a flowchart-style graph with appropriate node shapes
+  (round for people, rect for systems/containers, cylinder for `*Db`
+  variants, stadium for `*Queue`).
+- **Component primitives**: bare `rectangle`, `frame`, `interface`,
+  `component`, `database`, `queue`, `actor`, `cloud`, `node`, `card`,
+  `folder`, `file` declarations are accepted as nodes, with arrows
+  between them as edges.
+- **Activity**: `start` / `stop`, `:Action;` action nodes, `if (cond)
+  then (yes) … else (no) … endif` decision branches with `elseif`
+  chains, `while (cond) … endwhile` loops, `repeat … repeat while
+  (cond)` do-while loops. Renders into a top-down flowchart.
 
-PlantUML *activity* diagrams (`start`/`stop`/`if`/`while` syntax) are
-not yet supported; they fall back to the source code block for now.
+#### Scope & limitations
 
-#### Implementation notes
+**This is not a full mermaid or PlantUML implementation.** innomd
+parses the *common subset* used in technical documentation and renders
+the rest as plain code blocks. The fallback never crashes, never warns
+loudly — unsupported syntax simply shows up as the original source.
 
-Layout for flowcharts and class diagrams uses
+What's *not* supported and currently falls back to a code block:
+
+- Mermaid: gitGraph, mindmap, journey, ER, state machines (all types),
+  pie, quadrant, timeline, requirement, sankey, mind map, kanban —
+  none of these have a renderer yet.
+- Mermaid: the modern `A@{ shape: cyl, label: "…" }` shape syntax,
+  styling directives (`style A fill:…`, `classDef`), subgraph
+  containers, click handlers.
+- PlantUML: nested `partition` blocks and `fork`/`fork again`/`end fork`
+  parallel splits — flattened to a sequential flow at parse time.
+- PlantUML: deployment, object, state, timing, network, archimate,
+  Wireframe (Salt), ER, EBNF, regex, JSON/YAML, MindMap, Work
+  Breakdown, Gantt with resource allocation.
+- PlantUML: `!include` / `!includeurl` directives are recognized and
+  skipped, but the *contents* they would have pulled in (custom
+  shapes, sprites, themes) are not resolved. The C4-PlantUML stdlib
+  macros are special-cased so they don't *need* the include to work.
+- Both: anything that depends on an HTTP fetch (themes, includes,
+  remote sprites) is silently dropped — innomd is offline-only.
+
+Layout for flowcharts and class/C4 diagrams uses
 [grandalf](https://pypi.org/project/grandalf/), a pure-Python Sugiyama
 layered-graph library — no external Graphviz binary required. Sequence
 and gantt diagrams have their own dedicated renderers because they are
 not graphs (lifelines + time order; bars on a calendar axis).
 
-Anything outside the supported subset (gitGraph, mindmap, journey, ER,
-state machines, styling directives, subgraphs, modern `@{shape:…}`
-syntax, PlantUML activity diagrams) gracefully falls back to showing
-the original block as code, so unsupported diagrams never crash your
-render.
-
 Use `--diagrams-ascii` if your terminal lacks Unicode box-drawing
-support, or `--no-diagrams` to skip rendering entirely and show the
-mermaid source as a normal code block.
+support, or `--no-diagrams` to skip rendering entirely and show every
+diagram source as a normal code block.
+
+If a diagram is too wide for the terminal it falls back to the source
+by default. Pass `--diagrams-wide` to render it at its natural width
+anyway — best paired with the built-in pager (default on TTY), which
+sets `LESS=-R -S` so long diagram lines scroll horizontally with the
+arrow keys instead of wrapping. Without a pager, lines may wrap.
 
 ## Comparison
 
 How `innomd` stacks up against other terminal Markdown viewers:
 
-| Tool       | LaTeX math | Jupyter `.ipynb` | Live reload | Mermaid | Tables | Code highlighting | Images | Language |
-|------------|:----------:|:----------------:|:-----------:|:-------:|:------:|:-----------------:|:------:|:--------:|
-| **innomd** | ✅ (Unicode) | ✅ | ✅ | ✅ + PlantUML (flowchart, sequence, class, gantt) | ✅ | ✅ | — | Python |
-| glow       | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | — | Go |
-| mdcat      | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ (Kitty/iTerm2) | Rust |
-| bat        | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ (syntax only) | — | Rust |
-| frogmouth  | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | — | Python |
+| Tool       | LaTeX math | Jupyter `.ipynb` | Live reload | Mermaid | PlantUML | Tables | Code highlighting | Images | Language |
+|------------|:----------:|:----------------:|:-----------:|:-------:|:--------:|:------:|:-----------------:|:------:|:--------:|
+| **innomd** | ✅ (Unicode) | ✅ | ✅ | ✅ (flowchart, sequence, class, gantt) | ✅ (sequence, class, gantt, **C4**, activity) | ✅ | ✅ | — | Python |
+| glow       | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | — | Go |
+| mdcat      | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ (Kitty/iTerm2) | Rust |
+| bat        | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ (syntax only) | — | Rust |
+| frogmouth  | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | — | Python |
 
 If you don't write formulas, use `glow` or `mdcat` — they're excellent.
 If you do, this tool exists because nothing else did the job in the terminal.

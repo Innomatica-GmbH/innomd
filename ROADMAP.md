@@ -5,47 +5,21 @@ are notes on directions we have considered and decided to revisit later.
 
 ## Under consideration
 
-### PlantUML activity diagrams
+### PlantUML activity: nested forks and partitions
 
-PlantUML's "activity" diagrams use a control-flow style that is closer
-to a small programming language than to a graph definition:
+The current activity adapter handles `start`/`stop`/`:label;`, `if/
+then/else/endif` (with `elseif` chains), `while`/`endwhile`, and
+`repeat`/`repeat while`. What it *flattens* (parses but doesn't
+reflect in the rendered structure):
 
-```
-@startuml
-start
-:Read configuration;
-if (Valid?) then (yes)
-  :Initialize;
-else (no)
-  :Show error;
-  stop
-endif
-:Run main loop;
-stop
-@enduml
-```
+- `fork` / `fork again` / `end fork` — parallel splits collapse to a
+  sequential flow
+- `partition Name { … }` — the partition wrapper is dropped, contents
+  render inline
 
-Sequence/class/gantt PlantUML adapters already exist; activity is
-deferred because its parser needs structured-block tracking
-(`if`/`then`/`else`/`endif`, `while`/`endwhile`, `repeat`/`repeatwhile`,
-parallel splits). The output target would be `GraphIR` (the same
-flowchart renderer can draw it once parsed).
-
-A minimal first pass would handle: `start`/`stop`, sequential
-`:label;` actions, basic `if (…) then (yes) … else (no) … endif`
-branches. `while`/`repeat`/`fork`/`partition` come later.
-
-### Sequence diagrams: notes and activations
-
-`Note left of X: …`, `Note right of X: …`, `Note over X,Y: …` and
-`activate X` / `deactivate X` are currently parsed-then-skipped by the
-sequence adapter. Adding minimal support is mechanical:
-
-- IR: extend `SequenceIR` with a `notes` list and per-message
-  activation flags.
-- Renderer: notes as small left-/right-anchored boxes between message
-  rows; activations as a thin vertical bar overlaid on the lifeline
-  while the participant is active.
+A future pass could render parallel splits as two side-by-side branches
+(similar to the if/else split) and partitions as labeled grouping
+boxes around their contained nodes.
 
 ### Other mermaid diagram types
 
@@ -128,11 +102,33 @@ usage patterns make it worthwhile.
   PlantUML adapters can plug into the same renderers without changing
   the public entry point.
 - **Diagram engine — PlantUML adapters (sequence, class, gantt).**
-  Recognizes ` ```plantuml `, ` ```puml `, and ` ```uml ` fence
-  languages. Auto-detects `@startuml` / `@startgantt` and sniffs the
-  body to pick sequence vs class. Adapters parse PlantUML's syntax
-  (`participant`, `actor`, `class … { … }`, `[Task] lasts N days`,
-  `starts at [Other]'s end`, etc.) into the same format-agnostic IRs
-  used by mermaid, so the renderers are reused unchanged. Activity
-  diagrams (`start`/`stop`/`:label;`) remain on the code-block fallback
-  and are tracked separately in roadmap.
+  Recognizes ` ```plantuml `, ` ```puml `, ` ```uml `, and the
+  `plantumlcode` variant. Auto-detects `@startuml` / `@startgantt` and
+  sniffs the body to pick the right adapter.
+- **Diagram engine — PlantUML C4 architecture diagrams.** Dedicated
+  adapter for the C4-PlantUML macro vocabulary (`Person`, `System`,
+  `Container`, `ContainerDb`, `Component`, `Rel`, `BiRel`,
+  `System_Boundary` / `Enterprise_Boundary` / `Container_Boundary`).
+  Handles named parameters (`$tags=…`, `$sprite=…`) by dropping them
+  and using the positional sequence. Plain PlantUML component
+  primitives (`rectangle`, `frame`, `interface`, `component`,
+  `database`, `queue`, `actor`, `cloud`, `node`, `card`, `folder`,
+  `file`) are recognized in the same adapter so component diagrams
+  render too.
+- **Diagram engine — PlantUML activity diagrams.** Control-flow
+  parser for `start` / `stop`, `:Action;` action steps, `if (cond)
+  then (yes) … else (no) … endif` decisions with `elseif` chains,
+  `while … endwhile` loops, and `repeat … repeat while (cond)` loops.
+  Compiles the activity tree into `GraphIR` and renders via the
+  flowchart pipeline.
+- **Sequence diagrams — notes and activations.** `Note left/right/
+  over of X: text` (single-line and multi-line forms) renders as
+  small box anchored to the lifeline. `activate X` / `deactivate X`
+  overlays a thin vertical bar on the participant's lifeline for the
+  duration. Both work for mermaid and PlantUML.
+- **Diagram engine — fence-language flexibility and indented fences.**
+  In addition to ` ```mermaid `/` ```plantuml `, the parser now
+  accepts `puml`, `uml`, and `plantumlcode`. Fences nested inside
+  list items (4-space indent) are detected and dedented before
+  parsing, so real-world docs with numbered-list-wrapped diagrams
+  render correctly.

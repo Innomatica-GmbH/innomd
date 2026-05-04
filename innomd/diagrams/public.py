@@ -35,6 +35,24 @@ _SNIFF_CLASS = re.compile(
     r"\binterface\b|\babstract\b",
     re.I,
 )
+
+# C4-PlantUML uses a high-level macro vocabulary. Any of these names with
+# `(` after them is a strong hint that the block is a C4 diagram, which
+# our dedicated C4 adapter can parse into a flowchart-style GraphIR.
+_SNIFF_C4 = re.compile(
+    r"\b(?:Person(?:_Ext)?|System(?:Db|Queue)?(?:_Ext)?|Container(?:Db|Queue)?(?:_Ext)?|"
+    r"Component(?:Db|Queue)?(?:_Ext)?|Rel(?:_(?:U|D|L|R|Up|Down|Left|Right|Back))?|"
+    r"BiRel(?:_[UDLR])?|Boundary|System_Boundary|Enterprise_Boundary|"
+    r"Container_Boundary)\s*\(",
+    re.I,
+)
+# Plain PlantUML component-primitive blocks (`rectangle Foo`, `frame Bar`,
+# `interface Baz`, …). The same C4 adapter handles these into GraphIR.
+_SNIFF_COMPONENT = re.compile(
+    r"^\s*(?:rectangle|frame|interface|component|node|card|folder|"
+    r"file|cloud|agent|usecase|database|queue|storage)\s+\S+",
+    re.I | re.MULTILINE,
+)
 # Distinctive activity-diagram tokens. `end` alone is too ambiguous —
 # it's also used by sequence diagrams to close a `loop` / `alt` block —
 # so we look only at activity-only markers here.
@@ -89,18 +107,40 @@ def _detect(text: str) -> tuple[str | None, str | None]:
         # `@startuml` is generic — sniff the body to find out which kind.
         return "plantuml", _sniff_plantuml(body)
 
+    # Wrapper-less PlantUML snippets sometimes appear in docs (showing
+    # just an `if/then/else/endif`, a naked `Person(…)/Rel(…)` block,
+    # or a one-line `A -> B : text` sequence). Only blocks coming from a
+    # diagram fence reach this function, so sniffing for plantuml-y
+    # patterns here is safe even though `->` is otherwise common text.
+    if _SNIFF_ACTIVITY.search(body):
+        return "plantuml", "activity"
+    if _SNIFF_C4.search(body):
+        return "plantuml", "c4"
+    if _SNIFF_SEQUENCE.search(body):
+        return "plantuml", "sequence"
+
     return None, None
 
 
 def _sniff_plantuml(body: str) -> str | None:
     """Decide which kind of `@startuml` block we're looking at."""
-    # Class is the most distinctive (specific keywords/connectors).
+    # C4 macros are extremely distinctive — check before generic class
+    # because C4 also uses arrows that would otherwise look like
+    # sequence messages.
+    if _SNIFF_C4.search(body):
+        return "c4"
+    # Plain component-primitive blocks (rectangle, frame, interface, …)
+    # are also routed to the C4 adapter, which knows how to render them
+    # into the flowchart IR.
+    if _SNIFF_COMPONENT.search(body):
+        return "c4"
+    # Class is the most distinctive of the standard PlantUML grammars.
     if _SNIFF_CLASS.search(body):
         return "class"
     # Activity uses block keywords + `:label;` syntax — detect before
     # sequence because activity also uses `->`.
     if _SNIFF_ACTIVITY.search(body):
-        return None  # not yet supported — fall back to code block
+        return "activity"
     # Default for `@startuml` with arrows: sequence.
     if _SNIFF_SEQUENCE.search(body):
         return "sequence"
@@ -128,6 +168,8 @@ def render_mermaid(text: str, width: int, *, ascii_only: bool = False) -> list[s
             if kind == "sequence":  return _render_plantuml_sequence(text, width, ascii_only)
             if kind == "class":     return _render_plantuml_class(text, width, ascii_only)
             if kind == "gantt":     return _render_plantuml_gantt(text, width, ascii_only)
+            if kind == "c4":        return _render_plantuml_c4(text, width, ascii_only)
+            if kind == "activity":  return _render_plantuml_activity(text, width, ascii_only)
     except Exception:
         # Defensive: never let a diagram bug crash the markdown renderer.
         return None
@@ -223,5 +265,31 @@ def _render_plantuml_gantt(text, width, ascii_only):
     try:
         ir = adapter.parse(text)
         return render(ir, width=width, ascii_only=ascii_only)
+    except DiagramError:
+        return None
+
+
+def _render_plantuml_c4(text, width, ascii_only):
+    from .adapters import plantuml_c4 as adapter
+    from .errors import DiagramError
+    from .layout.grandalf import compute_layout
+    from .render.ascii import render
+    try:
+        ir = adapter.parse(text)
+        layout = compute_layout(ir)
+        return render(layout, width=width, ascii_only=ascii_only)
+    except DiagramError:
+        return None
+
+
+def _render_plantuml_activity(text, width, ascii_only):
+    from .adapters import plantuml_activity as adapter
+    from .errors import DiagramError
+    from .layout.grandalf import compute_layout
+    from .render.ascii import render
+    try:
+        ir = adapter.parse(text)
+        layout = compute_layout(ir)
+        return render(layout, width=width, ascii_only=ascii_only)
     except DiagramError:
         return None

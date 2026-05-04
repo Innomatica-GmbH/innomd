@@ -44,7 +44,43 @@ class Block:
 
 
 @dataclass(frozen=True)
+class Activation:
+    """A range of messages during which a participant is "active".
+
+    PlantUML / mermaid mark this with `activate X` / `deactivate X`.
+    Visually rendered as a thin vertical bar overlaid on the lifeline
+    between the activation start and end.
+    """
+    participant: str
+    msg_start: int      # message index AFTER which the activation starts
+    msg_end: int        # message index AFTER which it ends (inclusive of last)
+
+
+class NoteSide(Enum):
+    LEFT = "left"
+    RIGHT = "right"
+    OVER = "over"        # spans one or more lifelines
+
+
+@dataclass(frozen=True)
+class Note:
+    """An annotation tied to a participant (or pair) at a position in the
+    message stream.
+
+    `participants` is a tuple of one or two participant ids (one for
+    left/right, one or two for over). `after_msg` is the index AFTER
+    which the note appears (-1 = before the first message).
+    """
+    side: NoteSide
+    participants: tuple[str, ...]
+    text: str
+    after_msg: int
+
+
+@dataclass(frozen=True)
 class SequenceIR:
     participants: tuple[Participant, ...]
     messages: tuple[Message, ...]
     blocks: tuple[Block, ...] = ()
+    activations: tuple[Activation, ...] = ()
+    notes: tuple[Note, ...] = ()

@@ -12,7 +12,10 @@ Self-messages get a small loop drawn on the lifeline.
 from __future__ import annotations
 
 from ..errors import RenderError
-from ..ir_sequence import Block, Message, MessageStyle, Participant, SequenceIR
+from ..ir_sequence import (
+    Activation, Block, Message, MessageStyle, Note, NoteSide,
+    Participant, SequenceIR,
+)
 from .box import ASCII, UNICODE, Glyphs
 
 
@@ -23,6 +26,7 @@ _MSG_ROWS = 3               # rows per message (label, arrow, blank)
 _SELF_MSG_ROWS = 4          # self-message takes one extra row for the loop
 _BLOCK_LABEL_ROWS = 1       # rows added per block start (one for the label)
 _BLOCK_END_ROWS = 1         # rows added per block end (one for the closer)
+_NOTE_ROWS = 4              # rows per inline note (top border, body, bottom)
 
 
 def render(ir: SequenceIR, *, width: int, ascii_only: bool = False) -> list[str]:
@@ -56,15 +60,35 @@ def render(ir: SequenceIR, *, width: int, ascii_only: bool = False) -> list[str]
     centers_by_id = {p.id: cx for p, cx in zip(ir.participants, centers)}
 
     # 4. Natural canvas width: enough for headers, plus room to the right
-    #    of the last lifeline for any self-message label originating there.
+    #    of the last lifeline for any self-message label originating there,
+    #    plus enough room on either side for notes anchored to participants.
     natural_w = centers[-1] + label_w[-1] // 2 + _PADDING
     for m in ir.messages:
         if m.src == m.dst and m.text and m.src in centers_by_id:
             cx = centers_by_id[m.src]
-            # Self-loop occupies cols cx..cx+5; label goes to its right.
             need = cx + 6 + len(m.text) + _PADDING
             if need > natural_w:
                 natural_w = need
+    for n in ir.notes:
+        cols = [centers_by_id.get(p) for p in n.participants if p in centers_by_id]
+        if not cols:
+            continue
+        text_lines = n.text.replace("<br/>", "\n").replace("\\n", "\n").splitlines() or [""]
+        inner = max((len(ln) for ln in text_lines), default=0)
+        box_w = inner + 4
+        if n.side.value == "right":
+            need = cols[0] + 2 + box_w + _PADDING
+        elif n.side.value == "left":
+            # Note expands leftward — affects PADDING area on the left;
+            # we don't shift other content, so this only matters when the
+            # note would extend below x=0 (we render anyway, possibly
+            # truncated). Don't enlarge canvas for this case.
+            need = natural_w
+        else:  # OVER
+            mid = (min(cols) + max(cols)) // 2
+            need = max(mid + box_w // 2, max(cols)) + _PADDING
+        if need > natural_w:
+            natural_w = need
 
     canvas_w = natural_w
     if canvas_w > width:
@@ -72,16 +96,17 @@ def render(ir: SequenceIR, *, width: int, ascii_only: bool = False) -> list[str]
             f"sequence needs {canvas_w} cols, only {width} available"
         )
 
-    # 5. Compute total height — messages + block markers + a footer row of
-    #    participant boxes (mirrors the header so long diagrams stay
+    # 5. Compute total height — messages + block markers + notes + a footer
+    #    row of participant boxes (mirrors the header so long diagrams stay
     #    readable when the header scrolls off).
     total_msg_rows = sum(
         _SELF_MSG_ROWS if m.src == m.dst else _MSG_ROWS
         for m in ir.messages
     )
     total_block_rows = len(ir.blocks) * (_BLOCK_LABEL_ROWS + _BLOCK_END_ROWS)
+    total_note_rows = len(ir.notes) * _NOTE_ROWS
     canvas_h = (_PADDING + _HEADER_H + total_msg_rows + total_block_rows
-                + _HEADER_H + _PADDING + 1)
+                + total_note_rows + _HEADER_H + _PADDING + 1)
 
     # 5. Allocate canvas.
     grid = [[" "] * canvas_w for _ in range(canvas_h)]
@@ -99,41 +124,74 @@ def render(ir: SequenceIR, *, width: int, ascii_only: bool = False) -> list[str]
             _put(grid, cx, y, glyphs.v)
 
     # 8. Draw each message in turn, advancing y. Block start/end markers
-    #    insert one row each before/after their message range.
+    #    insert one row each before/after their message range. Notes are
+    #    placed AFTER the message they're attached to.
     leftmost = centers[0]
     rightmost = centers[-1]
     blocks_start = {b.msg_start: b for b in ir.blocks}
-    # `blocks_end` keys by msg_end (the index AFTER the last contained
-    # message). Multiple blocks can end at the same boundary; collect lists.
     blocks_end_at: dict[int, list[Block]] = {}
     for b in ir.blocks:
         blocks_end_at.setdefault(b.msg_end, []).append(b)
+    notes_after_msg: dict[int, list[Note]] = {}
+    for n in ir.notes:
+        notes_after_msg.setdefault(n.after_msg, []).append(n)
 
+    # Track y-range each message occupies so activations can be drawn
+    # later on top of the lifelines.
+    msg_y_range: dict[int, tuple[int, int]] = {}
+
+    # Notes that come BEFORE the first message (after_msg = -1).
     y = lifeline_top + 1   # leave one blank row below header
+    for note in notes_after_msg.get(-1, []):
+        _draw_note(grid, y, note, centers_by_id, glyphs)
+        y += _NOTE_ROWS
+
     for i, m in enumerate(ir.messages):
-        # Block opens?
         if i in blocks_start:
             b = blocks_start[i]
             _draw_block_open(grid, y, leftmost, rightmost, b, glyphs)
             y += _BLOCK_LABEL_ROWS
 
+        msg_start_y = y
         if m.src not in centers_by_id or m.dst not in centers_by_id:
             y += _MSG_ROWS
-            continue
-        src_x = centers_by_id[m.src]
-        dst_x = centers_by_id[m.dst]
-        if src_x == dst_x:
-            _draw_self_message(grid, src_x, y, m, glyphs)
-            y += _SELF_MSG_ROWS
         else:
-            _draw_message(grid, src_x, dst_x, y, m, glyphs)
-            y += _MSG_ROWS
+            src_x = centers_by_id[m.src]
+            dst_x = centers_by_id[m.dst]
+            if src_x == dst_x:
+                _draw_self_message(grid, src_x, y, m, glyphs)
+                y += _SELF_MSG_ROWS
+            else:
+                _draw_message(grid, src_x, dst_x, y, m, glyphs)
+                y += _MSG_ROWS
+        msg_y_range[i] = (msg_start_y, y - 1)
 
-        # Block(s) close after this message?
         if (i + 1) in blocks_end_at:
             for b in blocks_end_at[i + 1]:
                 _draw_block_close(grid, y, leftmost, rightmost, b, glyphs)
                 y += _BLOCK_END_ROWS
+
+        # Notes attached after this message.
+        for note in notes_after_msg.get(i, []):
+            _draw_note(grid, y, note, centers_by_id, glyphs)
+            y += _NOTE_ROWS
+
+    # 8b. Activations — overlay a thin vertical bar on the active
+    # participant's lifeline column for the y-range of its activation.
+    for act in ir.activations:
+        if act.participant not in centers_by_id:
+            continue
+        cx = centers_by_id[act.participant]
+        if act.msg_start not in msg_y_range or act.msg_end not in msg_y_range:
+            continue
+        y0 = msg_y_range[act.msg_start][0]
+        y1 = msg_y_range[act.msg_end][1]
+        for ay in range(y0, y1 + 1):
+            cur = grid[ay][cx] if 0 <= ay < len(grid) else " "
+            # Don't overwrite arrow tips or other meaningful glyphs;
+            # only replace the lifeline glyph itself.
+            if cur in (glyphs.v, " "):
+                grid[ay][cx] = "▐" if glyphs is UNICODE else "#"
 
     # 9. Footer: repeat the participant boxes at the bottom so participant
     #    identity stays visible on long diagrams.
@@ -142,6 +200,64 @@ def render(ir: SequenceIR, *, width: int, ascii_only: bool = False) -> list[str]
         _draw_header_box(grid, cx, footer_y, lw, p.label, glyphs)
 
     return ["".join(row).rstrip() for row in grid]
+
+
+def _draw_note(grid, y: int, note: Note,
+               centers_by_id: dict[str, int], g: Glyphs) -> None:
+    """Render a sequence diagram note as a small box.
+
+    Layout:
+       row y:    blank (separator from preceding message)
+       row y+1:  ╭─────────╮  top of the note box
+       row y+2:  │ text    │  body
+       row y+3:  ╰─────────╯  bottom
+
+    Position depends on side: LEFT places the box just to the left of
+    the participant's lifeline; RIGHT just to the right; OVER spans
+    horizontally between two lifelines (or sits on top of one).
+    """
+    # Resolve participant column(s).
+    cols = [centers_by_id.get(p) for p in note.participants]
+    cols = [c for c in cols if c is not None]
+    if not cols:
+        return
+    # Compose label lines.
+    text_lines = note.text.replace("<br/>", "\n").replace("\\n", "\n").splitlines() or [""]
+    inner_w = max((len(ln) for ln in text_lines), default=0)
+    box_w = inner_w + 4
+    if note.side == NoteSide.LEFT:
+        right = cols[0] - 2
+        left = max(0, right - box_w + 1)
+    elif note.side == NoteSide.RIGHT:
+        left = cols[0] + 2
+        right = left + box_w - 1
+    else:  # OVER
+        if len(cols) >= 2:
+            mid = (min(cols) + max(cols)) // 2
+        else:
+            mid = cols[0]
+        left = max(0, mid - box_w // 2)
+        right = left + box_w - 1
+    # Box body — note row 0 stays blank as a separator. Box draws on
+    # rows y+1 .. y+3.
+    box_top = y + 1
+    box_bot = y + 3
+    _put(grid, left, box_top, g.rtl)
+    _put(grid, right, box_top, g.rtr)
+    _put(grid, left, box_bot, g.rbl)
+    _put(grid, right, box_bot, g.rbr)
+    for x in range(left + 1, right):
+        _put(grid, x, box_top, g.h)
+        _put(grid, x, box_bot, g.h)
+    _put(grid, left, y + 2, g.v)
+    _put(grid, right, y + 2, g.v)
+    for x in range(left + 1, right):
+        _put(grid, x, y + 2, " ")
+    # Place the first line of text centered.
+    text = text_lines[0] if text_lines else ""
+    text_x = left + 2 + max(0, (inner_w - len(text)) // 2)
+    for i, ch in enumerate(text):
+        _put(grid, text_x + i, y + 2, ch)
 
 
 def _draw_block_open(grid, y, leftmost, rightmost, block: Block, g: Glyphs) -> None:

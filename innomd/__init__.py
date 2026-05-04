@@ -298,11 +298,18 @@ def convert_math(tex: str) -> str:
     return s
 
 
-_DIAGRAM_FENCE_LANGS = frozenset({"mermaid", "plantuml", "puml", "uml"})
+_DIAGRAM_FENCE_LANGS = frozenset({
+    "mermaid", "plantuml", "puml", "uml",
+    # Common non-standard variants seen in real-world OSS docs.
+    "plantumlcode",   # used by skleanthous/C4-PlantumlSkin and similar repos
+    "plantuml-svg",   # GitHub Pages renderers
+    "plantuml!",      # jeffreytse/jekyll-spaceship plugin syntax
+})
 
 
 def _try_render_diagram(fenced_block: str, width: int,
-                        ascii_only: bool) -> str | None:
+                        ascii_only: bool,
+                        wide: bool = False) -> str | None:
     """If the fenced block is a supported diagram, return a replacement block.
 
     Recognized fence languages: ``` ```mermaid ```, ``` ```plantuml ```,
@@ -311,16 +318,37 @@ def _try_render_diagram(fenced_block: str, width: int,
     isn't a diagram fence or rendering failed.
     """
     lines = fenced_block.split("\n")
-    if len(lines) < 2 or not lines[0].startswith("```"):
+    if len(lines) < 2:
         return None
-    info = lines[0][3:].strip().lower()
+    # Determine the leading-indent of the opening fence and strip the same
+    # amount from each interior line. CommonMark allows up to 3 spaces of
+    # indentation on the fence; nested-list fences may have 4 or more.
+    first = lines[0]
+    stripped_first = first.lstrip(" \t")
+    if not stripped_first.startswith("```"):
+        return None
+    indent = len(first) - len(stripped_first)
+    info = stripped_first[3:].strip().lower()
     lang = info.split()[0] if info else ""
     if lang not in _DIAGRAM_FENCE_LANGS:
         return None
-    body = "\n".join(lines[1:-1])
+
+    def _dedent(s: str) -> str:
+        if indent and s.startswith(" " * indent):
+            return s[indent:]
+        return s.lstrip(" \t") if indent else s
+
+    body_lines = [_dedent(ln) for ln in lines[1:-1]]
+    body = "\n".join(body_lines)
     from .diagrams import render_mermaid
     # Reserve a few cells for Rich's code-block panel padding.
     eff_width = max(20, width - 4)
+    if wide:
+        # Generous ceiling — large enough for any practical diagram. The
+        # diagram still lays out as compactly as possible; this just lets
+        # it overflow the terminal width when it has to. Pagers like
+        # `less -S` then provide horizontal scrolling.
+        eff_width = 4096
     diagram = render_mermaid(body, eff_width, ascii_only=ascii_only)
     if diagram is None:
         return None
@@ -330,14 +358,23 @@ def _try_render_diagram(fenced_block: str, width: int,
 
 def preprocess(text: str, *, diagram_width: int = 80,
                diagrams_enabled: bool = True,
-               diagrams_ascii: bool = False) -> str:
-    fence_re = re.compile(r"(^```.*?^```)", re.DOTALL | re.MULTILINE)
+               diagrams_ascii: bool = False,
+               diagrams_wide: bool = False) -> str:
+    # Match fenced code blocks, allowing up to 3 leading spaces (CommonMark
+    # rule for fence indentation). Some real-world docs nest fences inside
+    # list items with 4-space indent — we accept those too, but strip the
+    # indent later before handing the body to a diagram adapter.
+    fence_re = re.compile(r"(^[ \t]{0,4}```.*?^[ \t]{0,4}```)",
+                          re.DOTALL | re.MULTILINE)
     parts = fence_re.split(text)
     out = []
     for part in parts:
-        if part.startswith("```"):
+        # `part.lstrip()` because indented fences (inside list items) have
+        # leading whitespace; we still want to treat them as code blocks.
+        if part.lstrip(" \t").startswith("```"):
             if diagrams_enabled:
-                replaced = _try_render_diagram(part, diagram_width, diagrams_ascii)
+                replaced = _try_render_diagram(part, diagram_width, diagrams_ascii,
+                                               wide=diagrams_wide)
                 if replaced is not None:
                     out.append(replaced)
                     continue
@@ -451,12 +488,15 @@ def build_renderer(theme_name: str, code_override: str | None):
 
 
 def render_once(text: str, width: int | None, theme_name: str, code_override: str | None,
-                use_pager: bool) -> None:
+                use_pager: bool, *, diagrams_wide: bool = False) -> None:
     Console, InnoMarkdown, rich_theme, code_theme = build_renderer(theme_name, code_override)
     console = Console(width=width, theme=rich_theme)
     md = InnoMarkdown(text, code_theme=code_theme, hyperlinks=True)
     if use_pager:
-        os.environ.setdefault("LESS", "-R")
+        # `-R` keeps colour codes intact; `-S` chops long lines instead
+        # of wrapping them so wide diagrams scroll horizontally.
+        less_flags = "-R -S" if diagrams_wide else "-R"
+        os.environ.setdefault("LESS", less_flags)
         with console.pager(styles=True):
             console.print(md)
     else:
@@ -484,13 +524,15 @@ class _WatchState:
     def __init__(self, file: str, user_width: int | None,
                  theme_name: str, code_override: str | None,
                  *, diagrams_enabled: bool = True,
-                 diagrams_ascii: bool = False) -> None:
+                 diagrams_ascii: bool = False,
+                 diagrams_wide: bool = False) -> None:
         self.file = Path(file)
         self.user_width = user_width
         self.theme_name = theme_name
         self.code_override = code_override
         self.diagrams_enabled = diagrams_enabled
         self.diagrams_ascii = diagrams_ascii
+        self.diagrams_wide = diagrams_wide
         self.lines: list[str] = []
         self.offset = 0
         self.cols, self.rows = _term_size()
@@ -518,7 +560,8 @@ def _render_lines(state: _WatchState) -> list[str]:
     try:
         processed = preprocess(text, diagram_width=width,
                                diagrams_enabled=state.diagrams_enabled,
-                               diagrams_ascii=state.diagrams_ascii)
+                               diagrams_ascii=state.diagrams_ascii,
+                               diagrams_wide=state.diagrams_wide)
         Console, InnoMarkdown, rich_theme, code_theme = build_renderer(
             state.theme_name, state.code_override)
     except Exception as e:
@@ -981,10 +1024,12 @@ def pick_file(start_dir: str | os.PathLike[str] = ".") -> str | None:
 def watch_loop(file: str, width: int | None, theme_name: str,
                code_override: str | None, *,
                diagrams_enabled: bool = True,
-               diagrams_ascii: bool = False) -> int:
+               diagrams_ascii: bool = False,
+               diagrams_wide: bool = False) -> int:
     state = _WatchState(file, width, theme_name, code_override,
                         diagrams_enabled=diagrams_enabled,
-                        diagrams_ascii=diagrams_ascii)
+                        diagrams_ascii=diagrams_ascii,
+                        diagrams_wide=diagrams_wide)
 
     if not sys.stdin.isatty():
         print("innomd: --watch requires an interactive terminal on stdin",
@@ -1068,6 +1113,13 @@ def main() -> int:
                    help="disable rendering of mermaid diagrams (show raw fence instead)")
     p.add_argument("--diagrams-ascii", action="store_true",
                    help="render diagrams with ASCII glyphs instead of Unicode box-drawing")
+    p.add_argument("--diagrams-wide", action="store_true",
+                   help="render wide diagrams at their natural width "
+                        "rather than falling back to source. Best used with "
+                        "the pager (default on TTY): the LESS env var is "
+                        "set to `-R -S` so long lines scroll horizontally "
+                        "instead of wrapping. Without a pager, lines may "
+                        "wrap or be clipped by the terminal.")
     p.add_argument("--list-themes", action="store_true", help="list available themes and exit")
     p.add_argument("-V", "--version", action="version",
                    version=f"innomd {__version__}")
@@ -1105,7 +1157,8 @@ def main() -> int:
             return 1
         return watch_loop(args.file, args.width, args.theme, args.code_theme,
                           diagrams_enabled=not args.no_diagrams,
-                          diagrams_ascii=args.diagrams_ascii)
+                          diagrams_ascii=args.diagrams_ascii,
+                          diagrams_wide=args.diagrams_wide)
 
     try:
         text = load_source(args.file)
@@ -1122,7 +1175,10 @@ def main() -> int:
     eff_width = args.width or _term_size()[0]
     processed = preprocess(text, diagram_width=eff_width,
                            diagrams_enabled=not args.no_diagrams,
-                           diagrams_ascii=args.diagrams_ascii)
+                           diagrams_ascii=args.diagrams_ascii,
+                           diagrams_wide=args.diagrams_wide)
+    # Stash for render_once below.
+    _wide = args.diagrams_wide
 
     if args.raw:
         sys.stdout.write(processed)
@@ -1130,7 +1186,8 @@ def main() -> int:
 
     try:
         use_pager = (not args.no_pager) and sys.stdout.isatty()
-        render_once(processed, args.width, args.theme, args.code_theme, use_pager)
+        render_once(processed, args.width, args.theme, args.code_theme,
+                    use_pager, diagrams_wide=_wide)
     except ImportError:
         print("innomd: 'rich' is not installed — install with: pip install rich",
               file=sys.stderr)

@@ -81,13 +81,21 @@ def render(layout: LayoutResult, *, width: int, ascii_only: bool = False) -> lis
     grid = [[" "] * canvas_w for _ in range(canvas_h)]
 
     # Draw edges first so node borders sit on top of any overlapping line.
+    # Labels are deferred until after nodes are drawn so we can avoid
+    # placing them inside (or fragments next to) the box characters.
     for ep, pts in edges_proj:
         _draw_edge(grid, pts, ep.edge.style, ep.edge.arrow,
-                   ep.edge.label, glyphs)
+                   None, glyphs)
 
     # Snip edge endpoints that ran into a node body — replace with box border.
     for p in placed:
         _draw_node(grid, p, glyphs)
+
+    # Now that nodes are drawn, place edge labels — they'll see the box
+    # cells as occupied and look for free rows nearby.
+    for ep, pts in edges_proj:
+        if ep.edge.label:
+            _place_edge_label(grid, pts, ep.edge.label)
 
     # Place arrowheads last so they aren't overdrawn by node borders.
     for ep, pts in edges_proj:
@@ -684,21 +692,103 @@ def _place_edge_label(grid: list[list[str]], pts: list[tuple[int, int]],
             best_len = seg_len
             best = (x0, y0, x1, y1)
     if best is None:
-        # Vertical only: place label to the right of the midpoint.
+        # Vertical-only edge — place label next to the midpoint. Try
+        # several offsets (right side first, then left, then ±1 row) so
+        # parallel vertical edges with same midpoints don't all stamp on
+        # the same cells.
         x0, y0 = pts[0]
         x1, y1 = pts[-1]
-        mx = x0 + 1
         my = (y0 + y1) // 2
-        for i, ch in enumerate(label):
-            _put(grid, mx + i, my, ch)
+        # Candidate (x, y) anchors, ordered by preference.
+        candidates = [
+            (x0 + 2, my),       # 2 right of the line
+            (x0 - len(label) - 1, my),   # left side
+            (x0 + 2, my - 1),   # right, one row up
+            (x0 + 2, my + 1),   # right, one row down
+            (x0 - len(label) - 1, my - 1),
+            (x0 - len(label) - 1, my + 1),
+        ]
+        for cx, cy in candidates:
+            if 0 <= cy < len(grid) and _label_fits(grid, cx, cy, label):
+                _stamp(grid, cx, cy, label)
+                return
+        # Fallback: original "to the right of midpoint" position.
+        _stamp(grid, x0 + 1, my, label)
         return
     x0, y0, x1, _ = best
     cx = (x0 + x1) // 2
     start = cx - len(label) // 2
-    # Place above the segment when there's room; else below.
+    # Prefer one row above the segment (so it doesn't sit on the line);
+    # if occupied, try the row below, and so on.
     target_y = y0 - 1 if y0 - 1 >= 0 else y0 + 1
+    _stamp_label(grid, start, target_y, label, allow_y_offset=True,
+                 prefer_up=(y0 - 1 >= 0))
+
+
+def _stamp_label(grid: list[list[str]], x: int, y: int, label: str,
+                 *, allow_y_offset: bool, prefer_up: bool = True) -> None:
+    """Place `label` at (x, y) with a 1-cell space buffer on each side.
+
+    Searches neighbouring rows (and a little x-shift on each row) for a
+    spot where the label doesn't collide with already-drawn box / line /
+    label characters. If nothing fits anywhere within the search range,
+    the label is dropped silently — better than overwriting another
+    label or the border of a node box.
+    """
+    if not (0 <= y < len(grid)):
+        return
+    # First try the exact target row, then expanding rings of nearby rows.
+    candidates = [y]
+    if allow_y_offset:
+        steps = [1, 2, 3, 4, 5, 6]
+        if prefer_up:
+            for s in steps:
+                candidates.extend([y - s, y + s])
+        else:
+            for s in steps:
+                candidates.extend([y + s, y - s])
+    # On each candidate row, also try a small x-shift in case the exact
+    # x is occupied but a neighbouring x is free.
+    x_offsets = [0, 2, -2, 4, -4]
+    for cand_y in candidates:
+        if not (0 <= cand_y < len(grid)):
+            continue
+        for dx in x_offsets:
+            if _label_fits(grid, x + dx, cand_y, label):
+                _stamp(grid, x + dx, cand_y, label)
+                return
+    # Nothing fit — drop the label rather than scribble over other
+    # diagram content. The visual is "less complete" but never confusing.
+
+
+def _label_fits(grid: list[list[str]], x: int, y: int, label: str) -> bool:
+    """True if placing `label` at (x, y) wouldn't collide with non-blank
+    cells, including a 1-cell buffer on each side."""
+    if not (0 <= y < len(grid)):
+        return False
+    row = grid[y]
+    n = len(row)
+    # Check the buffer cell to the left.
+    left = x - 1
+    if 0 <= left < n and row[left] not in (" ",):
+        return False
+    # Check each label cell.
+    for i in range(len(label)):
+        col = x + i
+        if not (0 <= col < n):
+            return False
+        if row[col] != " ":
+            return False
+    # Check the buffer cell to the right.
+    right = x + len(label)
+    if 0 <= right < n and row[right] not in (" ",):
+        return False
+    return True
+
+
+def _stamp(grid: list[list[str]], x: int, y: int, label: str) -> None:
     for i, ch in enumerate(label):
-        _put(grid, start + i, target_y, ch)
+        _put(grid, x + i, y, ch)
 
 
 def _draw_arrow(grid: list[list[str]], pts: list[tuple[int, int]],
