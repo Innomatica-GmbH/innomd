@@ -10,8 +10,11 @@ import json
 import os
 import re
 import select
+import shutil
 import signal
+import subprocess
 import sys
+import tempfile
 import termios
 import threading
 import time
@@ -488,18 +491,50 @@ def build_renderer(theme_name: str, code_override: str | None):
 
 
 def render_once(text: str, width: int | None, theme_name: str, code_override: str | None,
-                use_pager: bool, *, diagrams_wide: bool = False) -> None:
+                use_pager: bool, *, diagrams_wide: bool = False,
+                source_name: str | None = None) -> None:
     Console, InnoMarkdown, rich_theme, code_theme = build_renderer(theme_name, code_override)
-    console = Console(width=width, theme=rich_theme)
     md = InnoMarkdown(text, code_theme=code_theme, hyperlinks=True)
     if use_pager:
         # `-R` keeps colour codes intact; `-S` chops long lines instead
-        # of wrapping them so wide diagrams scroll horizontally.
-        less_flags = "-R -S" if diagrams_wide else "-R"
-        os.environ.setdefault("LESS", less_flags)
-        with console.pager(styles=True):
-            console.print(md)
+        # of wrapping them so wide diagrams scroll horizontally. `-P`
+        # replaces less's default `:` prompt with filename + position.
+        name = Path(source_name).name if source_name else "stdin"
+        # less prompt: `%lb` = bottom line, `%L` = total lines,
+        # `%pb` = percent at bottom. `\%` is a literal percent sign.
+        # The `$` terminates the -P option value inside $LESS.
+        prompt = f"innomd · {name} · %lb/%L · %pb\\% · q to quit"
+        less_flags = f"-R -P{prompt}$"
+        if diagrams_wide:
+            less_flags = f"-R -S -P{prompt}$"
+
+        # Render into a temp file rather than piping. With a real file
+        # less knows the total size upfront, so %L and %pb resolve from
+        # the first screen instead of showing `?` until you scroll to
+        # EOF.
+        buf_width = width or shutil.get_terminal_size((80, 24)).columns
+        buf = io.StringIO()
+        cap_console = Console(file=buf, theme=rich_theme,
+                              width=buf_width, force_terminal=True,
+                              color_system="truecolor")
+        cap_console.print(md)
+        rendered = buf.getvalue()
+
+        fd, tmp_path = tempfile.mkstemp(prefix="innomd-", suffix=".ansi")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(rendered)
+            env = os.environ.copy()
+            env.setdefault("LESS", less_flags)
+            try:
+                subprocess.run(["less", tmp_path], env=env)
+            except FileNotFoundError:
+                # No `less` available — fall back to direct print.
+                sys.stdout.write(rendered)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
     else:
+        console = Console(width=width, theme=rich_theme)
         console.print(md)
 
 
@@ -1187,7 +1222,8 @@ def main() -> int:
     try:
         use_pager = (not args.no_pager) and sys.stdout.isatty()
         render_once(processed, args.width, args.theme, args.code_theme,
-                    use_pager, diagrams_wide=_wide)
+                    use_pager, diagrams_wide=_wide,
+                    source_name=args.file)
     except ImportError:
         print("innomd: 'rich' is not installed — install with: pip install rich",
               file=sys.stderr)
