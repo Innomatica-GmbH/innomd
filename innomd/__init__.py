@@ -1,7 +1,7 @@
 """innomd — terminal Markdown viewer with LaTeX math support."""
 from __future__ import annotations
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 __all__ = ["main", "__version__"]
 
 import argparse
