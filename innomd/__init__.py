@@ -444,11 +444,14 @@ def load_source(file: str | None) -> str:
     return raw
 
 
-def build_renderer(theme_name: str, code_override: str | None):
+def build_renderer(theme_name: str, code_override: str | None, *,
+                   wide_code: bool = False):
     from rich import box
     from rich.align import Align
+    from rich.cells import cell_len
     from rich.console import Console
-    from rich.markdown import Markdown, TableElement, HorizontalRule
+    from rich.markdown import CodeBlock, Markdown, TableElement, HorizontalRule
+    from rich.syntax import Syntax
     from rich.table import Table
     from rich.text import Text
     from rich.theme import Theme
@@ -473,8 +476,27 @@ def build_renderer(theme_name: str, code_override: str | None):
         def __rich_console__(self, console, options):
             yield Align.center(Text("· · ·", style=t["hr"]))
 
+    class InnoCodeBlock(CodeBlock):
+        # Rich always word-wraps code blocks at the console width, which
+        # would fold a wide diagram before `less -S` ever sees it. Render
+        # at natural width instead; the caller prints with crop=False.
+        def __rich_console__(self, console, options):
+            code = str(self.text).rstrip()
+            syntax = Syntax(code, self.lexer_name, theme=self.theme,
+                            word_wrap=False, padding=1)
+            # console.measure() clamps to max_width, so measure by hand;
+            # +2 for Syntax's padding=1 on either side.
+            natural = max((cell_len(ln.expandtabs(syntax.tab_size))
+                           for ln in code.splitlines()),
+                          default=0) + 2
+            width = max(options.max_width, natural)
+            yield from console.render(syntax, options.update_width(width))
+
     class InnoMarkdown(Markdown):
         elements = {**Markdown.elements, "table_open": InnoTable, "hr": InnoRule}
+        if wide_code:
+            elements["fence"] = InnoCodeBlock
+            elements["code_block"] = InnoCodeBlock
 
     rich_theme = Theme({
         "markdown.h1": t["h1"],
@@ -493,20 +515,30 @@ def build_renderer(theme_name: str, code_override: str | None):
 def render_once(text: str, width: int | None, theme_name: str, code_override: str | None,
                 use_pager: bool, *, diagrams_wide: bool = False,
                 source_name: str | None = None) -> None:
-    Console, InnoMarkdown, rich_theme, code_theme = build_renderer(theme_name, code_override)
+    # Only the pager can scroll horizontally, so only there are code
+    # blocks left unwrapped for --diagrams-wide.
+    wide_code = use_pager and diagrams_wide
+    Console, InnoMarkdown, rich_theme, code_theme = build_renderer(
+        theme_name, code_override, wide_code=wide_code)
     md = InnoMarkdown(text, code_theme=code_theme, hyperlinks=True)
     if use_pager:
         # `-R` keeps colour codes intact; `-S` chops long lines instead
         # of wrapping them so wide diagrams scroll horizontally. `-P`
         # replaces less's default `:` prompt with filename + position.
         name = Path(source_name).name if source_name else "stdin"
+        # `.`, `?`, `:`, `%` and `\` are prompt metacharacters in less;
+        # unescaped, `README.md` would show up as `READMEmd`.
+        name = re.sub(r"([\\?:.%])", r"\\\1", name)
         # less prompt: `%lb` = bottom line, `%L` = total lines,
         # `%pb` = percent at bottom. `\%` is a literal percent sign.
-        # The `$` terminates the -P option value inside $LESS.
         prompt = f"innomd · {name} · %lb/%L · %pb\\% · q to quit"
-        less_flags = f"-R -P{prompt}$"
+        # Pass flags on the command line, not via $LESS: a user's own
+        # $LESS (e.g. `-F`) would otherwise replace them entirely and
+        # colour codes would show up as literal `ESC[...` text.
+        # Command-line flags override $LESS but keep its other options.
+        less_flags = ["-R", f"-P{prompt}"]
         if diagrams_wide:
-            less_flags = f"-R -S -P{prompt}$"
+            less_flags.insert(1, "-S")
 
         # Render into a temp file rather than piping. With a real file
         # less knows the total size upfront, so %L and %pb resolve from
@@ -517,17 +549,15 @@ def render_once(text: str, width: int | None, theme_name: str, code_override: st
         cap_console = Console(file=buf, theme=rich_theme,
                               width=buf_width, force_terminal=True,
                               color_system="truecolor")
-        cap_console.print(md)
+        cap_console.print(md, crop=not wide_code)
         rendered = buf.getvalue()
 
         fd, tmp_path = tempfile.mkstemp(prefix="innomd-", suffix=".ansi")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(rendered)
-            env = os.environ.copy()
-            env.setdefault("LESS", less_flags)
             try:
-                subprocess.run(["less", tmp_path], env=env)
+                subprocess.run(["less", *less_flags, tmp_path])
             except FileNotFoundError:
                 # No `less` available — fall back to direct print.
                 sys.stdout.write(rendered)
@@ -1151,8 +1181,8 @@ def main() -> int:
     p.add_argument("--diagrams-wide", action="store_true",
                    help="render wide diagrams at their natural width "
                         "rather than falling back to source. Best used with "
-                        "the pager (default on TTY): the LESS env var is "
-                        "set to `-R -S` so long lines scroll horizontally "
+                        "the pager (default on TTY): less is started with "
+                        "`-R -S` so long lines scroll horizontally "
                         "instead of wrapping. Without a pager, lines may "
                         "wrap or be clipped by the terminal.")
     p.add_argument("--list-themes", action="store_true", help="list available themes and exit")

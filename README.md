@@ -364,7 +364,7 @@ diagram source as a normal code block.
 If a diagram is too wide for the terminal it falls back to the source
 by default. Pass `--diagrams-wide` to render it at its natural width
 anyway — best paired with the built-in pager (default on TTY), which
-sets `LESS=-R -S` so long diagram lines scroll horizontally with the
+runs `less -R -S` so long diagram lines scroll horizontally with the
 arrow keys instead of wrapping. Without a pager, lines may wrap.
 
 ## Comparison

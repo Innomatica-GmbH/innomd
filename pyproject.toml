@@ -39,7 +39,7 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
-    "rich>=13.0",
+    "rich>=13.4",
     "grandalf>=0.8",
 ]
 
