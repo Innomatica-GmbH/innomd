@@ -512,8 +512,27 @@ def build_renderer(theme_name: str, code_override: str | None, *,
     return Console, InnoMarkdown, rich_theme, code_theme
 
 
+_OUTPUT_ESCAPE = re.compile(
+    r"(\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\))"
+)
+
+
+def _trim_trailing_space(text: str) -> str:
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        parts = _OUTPUT_ESCAPE.split(line)
+        # Escape sequences must remain in order even when they follow padding.
+        for j in range(len(parts) - 1, -1, -2):
+            parts[j] = parts[j].rstrip(" \t")
+            if parts[j]:
+                break
+        lines[i] = "".join(parts)
+    return "\n".join(lines)
+
+
 def render_once(text: str, width: int | None, theme_name: str, code_override: str | None,
                 use_pager: bool, *, diagrams_wide: bool = False,
+                trim_trailing_space: bool = False,
                 source_name: str | None = None) -> None:
     # Only the pager can scroll horizontally, so only there are code
     # blocks left unwrapped for --diagrams-wide.
@@ -551,6 +570,8 @@ def render_once(text: str, width: int | None, theme_name: str, code_override: st
                               color_system="truecolor")
         cap_console.print(md, crop=not wide_code)
         rendered = buf.getvalue()
+        if trim_trailing_space:
+            rendered = _trim_trailing_space(rendered)
 
         fd, tmp_path = tempfile.mkstemp(prefix="innomd-", suffix=".ansi")
         try:
@@ -565,7 +586,12 @@ def render_once(text: str, width: int | None, theme_name: str, code_override: st
             Path(tmp_path).unlink(missing_ok=True)
     else:
         console = Console(width=width, theme=rich_theme)
-        console.print(md)
+        if trim_trailing_space:
+            with console.capture() as capture:
+                console.print(md)
+            sys.stdout.write(_trim_trailing_space(capture.get()))
+        else:
+            console.print(md)
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
@@ -590,7 +616,8 @@ class _WatchState:
                  theme_name: str, code_override: str | None,
                  *, diagrams_enabled: bool = True,
                  diagrams_ascii: bool = False,
-                 diagrams_wide: bool = False) -> None:
+                 diagrams_wide: bool = False,
+                 trim_trailing_space: bool = False) -> None:
         self.file = Path(file)
         self.user_width = user_width
         self.theme_name = theme_name
@@ -598,6 +625,7 @@ class _WatchState:
         self.diagrams_enabled = diagrams_enabled
         self.diagrams_ascii = diagrams_ascii
         self.diagrams_wide = diagrams_wide
+        self.trim_trailing_space = trim_trailing_space
         self.lines: list[str] = []
         self.offset = 0
         self.cols, self.rows = _term_size()
@@ -640,7 +668,10 @@ def _render_lines(state: _WatchState) -> list[str]:
         console.print(md)
     except Exception as e:
         return [f"\x1b[31minnomd: render failed: {e}\x1b[0m"]
-    return buf.getvalue().rstrip("\n").split("\n")
+    rendered = buf.getvalue()
+    if state.trim_trailing_space:
+        rendered = _trim_trailing_space(rendered)
+    return rendered.rstrip("\n").split("\n")
 
 
 def _highlight_matches(line: str, pattern: re.Pattern) -> str:
@@ -1090,11 +1121,13 @@ def watch_loop(file: str, width: int | None, theme_name: str,
                code_override: str | None, *,
                diagrams_enabled: bool = True,
                diagrams_ascii: bool = False,
-               diagrams_wide: bool = False) -> int:
+               diagrams_wide: bool = False,
+               trim_trailing_space: bool = False) -> int:
     state = _WatchState(file, width, theme_name, code_override,
                         diagrams_enabled=diagrams_enabled,
                         diagrams_ascii=diagrams_ascii,
-                        diagrams_wide=diagrams_wide)
+                        diagrams_wide=diagrams_wide,
+                        trim_trailing_space=trim_trailing_space)
 
     if not sys.stdin.isatty():
         print("innomd: --watch requires an interactive terminal on stdin",
@@ -1168,6 +1201,8 @@ def main() -> int:
     p.add_argument("-P", "--no-pager", action="store_true", help="do not page output")
     p.add_argument("-r", "--raw", action="store_true", help="print preprocessed markdown without rendering")
     p.add_argument("-w", "--width", type=int, default=None, help="terminal width in columns")
+    p.add_argument("--trim-trailing-space", action="store_true",
+                   help="remove trailing spaces and tabs from rendered lines")
     p.add_argument("-t", "--theme", default="default",
                    help=f"preset theme: {', '.join(THEMES)}")
     p.add_argument("-c", "--code-theme", default=None,
@@ -1223,7 +1258,8 @@ def main() -> int:
         return watch_loop(args.file, args.width, args.theme, args.code_theme,
                           diagrams_enabled=not args.no_diagrams,
                           diagrams_ascii=args.diagrams_ascii,
-                          diagrams_wide=args.diagrams_wide)
+                          diagrams_wide=args.diagrams_wide,
+                          trim_trailing_space=args.trim_trailing_space)
 
     try:
         text = load_source(args.file)
@@ -1253,6 +1289,7 @@ def main() -> int:
         use_pager = (not args.no_pager) and sys.stdout.isatty()
         render_once(processed, args.width, args.theme, args.code_theme,
                     use_pager, diagrams_wide=_wide,
+                    trim_trailing_space=args.trim_trailing_space,
                     source_name=args.file)
     except ImportError:
         print("innomd: 'rich' is not installed — install with: pip install rich",
