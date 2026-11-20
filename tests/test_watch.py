@@ -1,9 +1,38 @@
 """Unit tests for watch-mode helpers (pure, non-interactive)."""
 import unittest
+import tempfile
+from pathlib import Path
 
 from conftest import load_innomd
 
 innomd = load_innomd()
+
+
+class TestTrimTrailingSpace(unittest.TestCase):
+    def test_preserves_ansi_and_hyperlinks(self):
+        source = ("a \x1b[31m \x1b[0m\n"
+                  "\x1b]8;;https://example.com\x1b\\link \x1b]8;;\x1b\\ \n"
+                  "  indented  text\t \n")
+        expected = ("a\x1b[31m\x1b[0m\n"
+                    "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\\n"
+                    "  indented  text\n")
+        self.assertEqual(innomd._trim_trailing_space(source), expected)
+
+    def test_watch_lines_are_trimmed_only_when_requested(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "doc.md"
+            path.write_text("# heading\n\nparagraph\n", encoding="utf-8")
+            normal = innomd._WatchState(str(path), 80, "default", None)
+            trimmed = innomd._WatchState(str(path), 80, "default", None,
+                                         trim_trailing_space=True)
+            normal_lines = innomd._render_lines(normal)
+            trimmed_lines = innomd._render_lines(trimmed)
+        self.assertTrue(any(innomd._ansi_strip(line).endswith(" ")
+                            for line in normal_lines))
+        self.assertEqual(trimmed_lines,
+                         [innomd._trim_trailing_space(line) for line in normal_lines])
+        self.assertTrue(all(not innomd._ansi_strip(line).endswith((" ", "\t"))
+                            for line in trimmed_lines))
 
 
 class TestAnsiStrip(unittest.TestCase):

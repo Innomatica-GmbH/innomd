@@ -177,6 +177,7 @@ innomd --list-themes              # list available presets
 cat notes.md | innomd             # pipe from stdin
 innomd -P file.md                 # no pager
 innomd -w 100 file.md             # fixed width
+innomd --trim-trailing-space file.md # remove trailing padding for copying
 innomd -r file.md                 # raw preprocessed markdown
 ```
 
@@ -187,6 +188,7 @@ innomd -r file.md                 # raw preprocessed markdown
 | `-P`, `--no-pager`      | Print directly, no pager                      |
 | `-r`, `--raw`           | Output preprocessed markdown, no render       |
 | `-w N`, `--width N`     | Force terminal width in columns               |
+| `--trim-trailing-space` | Remove trailing spaces and tabs from rendered lines |
 | `-t`, `--theme`         | Preset theme (see `--list-themes`)            |
 | `-c`, `--code-theme`    | Override Pygments code theme only             |
 | `-W`, `--watch`         | Live-reload: re-render on file change         |
@@ -194,6 +196,10 @@ innomd -r file.md                 # raw preprocessed markdown
 | `--diagrams-ascii`      | Render diagrams with ASCII glyphs only        |
 | `--diagrams-wide`       | Render wide diagrams at natural width (use with pager + `less -S`) |
 | `--list-themes`         | List available preset themes                  |
+
+`--trim-trailing-space` works with direct output, the pager, and watch mode.
+It also removes intentional trailing whitespace, including in code blocks,
+and may shorten colored backgrounds. It does not affect `--raw` output.
 
 ### Watch mode
 

@@ -114,6 +114,15 @@ class TestRendering(unittest.TestCase):
             self.assertIn("Hi", out, msg=f"theme {theme} failed")
             self.assertIn("a+b", out, msg=f"theme {theme} failed")
 
+    def test_trim_trailing_space_is_opt_in(self):
+        md = "# Heading\n\nParagraph text.\n\n- item\n\n```\n  code\n```\n"
+        default = self._render(md)
+        trimmed = self._render(md, args=("--trim-trailing-space",))
+        self.assertTrue(any(line.endswith(" ") for line in default.splitlines()))
+        self.assertEqual(trimmed, "\n".join(line.rstrip(" \t")
+                                             for line in default.split("\n")))
+        self.assertIn("  code", trimmed)
+
 
 class TestStdin(unittest.TestCase):
     def test_pipe_stdin(self):
@@ -129,6 +138,13 @@ class TestStdin(unittest.TestCase):
         self.assertIn("x²", r.stdout)
         # preprocess wraps display math in a blockquote
         self.assertIn(">", r.stdout)
+
+    def test_trim_does_not_change_raw_output(self):
+        text = "plain text   \n"
+        raw = run(["--raw"], input_text=text)
+        trimmed = run(["--raw", "--trim-trailing-space"], input_text=text)
+        self.assertEqual(raw.returncode, 0)
+        self.assertEqual(trimmed.stdout, raw.stdout)
 
 
 class TestIpynbE2E(unittest.TestCase):

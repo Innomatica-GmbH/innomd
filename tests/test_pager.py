@@ -11,7 +11,7 @@ innomd = load_innomd()
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
-def page(text, *, wide=False, source_name="doc.md", env=None):
+def page(text, *, wide=False, source_name="doc.md", env=None, trim=False):
     """Run render_once() with the pager path, capturing less's argv and input."""
     captured = {}
 
@@ -19,14 +19,16 @@ def page(text, *, wide=False, source_name="doc.md", env=None):
         captured["argv"] = argv
         captured["kwargs"] = kwargs
         with open(argv[-1], encoding="utf-8") as f:
-            captured["lines"] = ANSI.sub("", f.read()).split("\n")
+            captured["output"] = f.read()
+            captured["lines"] = ANSI.sub("", captured["output"]).split("\n")
 
     with mock.patch.object(innomd.subprocess, "run", fake_run), \
          mock.patch.object(innomd.shutil, "get_terminal_size",
                            return_value=os.terminal_size((80, 24))), \
          mock.patch.dict(os.environ, env or {}):
         innomd.render_once(text, None, "default", None, True,
-                           diagrams_wide=wide, source_name=source_name)
+                           diagrams_wide=wide, source_name=source_name,
+                           trim_trailing_space=trim)
     return captured
 
 
@@ -57,6 +59,15 @@ class TestPagerInvocation(unittest.TestCase):
         c = page("# hi", source_name="/tmp/a.b?c:d%e.md")
         prompt = next(a for a in c["argv"] if a.startswith("-P"))
         self.assertIn(r"a\.b\?c\:d\%e\.md", prompt)
+
+    def test_trim_preserves_colored_pager_output(self):
+        text = "# heading\n\nParagraph with **bold** text.\n\n- item\n"
+        default = page(text)
+        trimmed = page(text, trim=True)
+        self.assertIn("\x1b[", trimmed["output"])
+        self.assertTrue(any(line.endswith(" ") for line in default["lines"]))
+        self.assertEqual(trimmed["lines"],
+                         [line.rstrip(" \t") for line in default["lines"]])
 
 
 class TestWideCodeBlocks(unittest.TestCase):
